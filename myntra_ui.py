@@ -54,40 +54,17 @@ def profit_percent_from_discount(discount, df):
         fixed_fee_formula = df['Fixed Fee']
 
         selling_price = mrp - (mrp * discount / 100)
-        print(f"Selling price: {selling_price}")
-        
         customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
-        print(f"Customer shipping charges: {customer_shipping_charges}")
-        
-        selling_price_after_log = selling_price - customer_shipping_charges
-        print(f"Selling price after logistics: {selling_price_after_log}")
-        
+        selling_price_after_log = selling_price - customer_shipping_charges        
         gst_amount = selling_price * gst / 100
-        print(f"GST amount: {gst_amount}")
-        
         commission_percent = calc_commission_charges(commission_formula, selling_price_after_log)
-        print(f"Commission percentage: {commission_percent}%")
-        
         commission_amount = selling_price_after_log * commission_percent / 100
-        print(f"Commission amount: {commission_amount}")
-        
         fixed_fee = calc_fixed_fee(fixed_fee_formula, selling_price_after_log)
-        print(f"Fixed fee: {fixed_fee}")
-        
         return_fee = selling_price_after_log * 0.02
-        print(f"Return fee: {return_fee}")
-        
         marketting_packing_cost = selling_price_after_log * 0.05
-        print(f"Marketing & packing cost: {marketting_packing_cost}")
-        
         total_cost = cp + gst_amount + commission_amount + fixed_fee + return_fee + marketting_packing_cost
-        print(f"Total cost: {total_cost}")
-        
         profit = selling_price_after_log - total_cost
-        print(f"Profit: {profit}")
-        
         profit_percent = profit / selling_price * 100
-        print(f"Profit percentage: {profit_percent}%")
         
         return profit, profit_percent
 
