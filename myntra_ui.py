@@ -132,7 +132,7 @@ def process_excel_file(uploaded_file, target_profit):
             data.append(row)
         
         df_formulas = pd.DataFrame(data[1:], columns=data[0])
-        df1 = df_formulas.iloc[:, :38]
+        df1 = df_formulas.iloc[:, :52]
         df2 = df1[['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status', 'cp', 'gst', 'level', 
                    'Customer shipping charges', 'Commission %', 'Fixed Fee']]
         
