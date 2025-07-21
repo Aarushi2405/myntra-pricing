@@ -71,7 +71,7 @@ def profit_percent_from_discount(discount, df):
     except Exception as e:
         return 0, 0
 
-def build_profit_table(df, target_profit_percent):
+def build_profit_table(df, target_profit_percent, min_absolute_profit=100.0):
     profit_data = []
     
     progress_bar = st.progress(0)
@@ -94,7 +94,7 @@ def build_profit_table(df, target_profit_percent):
                 profit, profit_pct = profit_percent_from_discount(discount, row)
                 row_profit[f'{discount}%'] = round(profit_pct, 2)
                 
-                if profit_pct >= target_profit_percent and profit > 100:
+                if profit_pct >= target_profit_percent and profit > min_absolute_profit:
                     best_discount = discount
                     best_profit = profit
 
@@ -121,7 +121,7 @@ def build_profit_table(df, target_profit_percent):
     
     return combined_df
 
-def process_excel_file(uploaded_file, target_profit):
+def process_excel_file(uploaded_file, target_profit, min_absolute_profit):
     try:
         # Read the uploaded file
         wb = openpyxl.load_workbook(uploaded_file, data_only=False)
@@ -141,7 +141,7 @@ def process_excel_file(uploaded_file, target_profit):
         df3 = df3.set_index('ARTICLE NO')
         
         # Process the data
-        result_df = build_profit_table(df3, float(target_profit))
+        result_df = build_profit_table(df3, float(target_profit), float(min_absolute_profit))
         
         return result_df, df_formulas
         
@@ -180,6 +180,16 @@ def main():
             help="Enter the minimum profit percentage you want to achieve"
         )
         
+        # Minimum absolute profit input
+        min_absolute_profit = st.number_input(
+            "Minimum Absolute Profit (₹)",
+            min_value=0.0,
+            max_value=10000.0,
+            value=100.0,
+            step=10.0,
+            help="Enter the minimum absolute profit amount in rupees"
+        )
+        
         # Process button
         process_button = st.button("🚀 Process Data", type="primary")
     
@@ -189,7 +199,7 @@ def main():
         
         if process_button:
             with st.spinner("Processing your data... This may take a few minutes."):
-                result_df, original_df = process_excel_file(uploaded_file, target_profit)
+                result_df, original_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit)
             
             if result_df is not None:
                 st.success("✅ Processing completed!")
@@ -198,7 +208,7 @@ def main():
                 st.header("📈 Analysis Results")
                 
                 # Summary statistics
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
                     total_products = len(result_df)
@@ -211,6 +221,10 @@ def main():
                 with col3:
                     success_rate = (products_with_target / total_products * 100) if total_products > 0 else 0
                     st.metric("Success Rate", f"{success_rate:.1f}%")
+                
+                with col4:
+                    avg_profit = result_df[result_df['Price'] > 0]['Price'].mean() if len(result_df[result_df['Price'] > 0]) > 0 else 0
+                    st.metric("Avg. Profit (₹)", f"₹{avg_profit:.0f}")
                 
                 # Display the results table
                 st.subheader("📋 Detailed Results")
@@ -257,6 +271,18 @@ def main():
             - **Customer shipping charges**: Shipping charges formula
             - **Commission %**: Commission percentage formula
             - **Fixed Fee**: Fixed fee formula
+            """)
+        
+        # Show parameter explanation
+        with st.expander("ℹ️ Parameter Explanation"):
+            st.markdown("""
+            **Target Profit Percentage (%)**: The minimum profit percentage you want to achieve on the selling price.
+            
+            **Minimum Absolute Profit (₹)**: The minimum absolute profit amount in rupees that a product must generate to be considered viable. Products with profit below this amount will not be marked as meeting the target, even if they meet the percentage criteria.
+            
+            For example:
+            - If Target Profit % = 15% and Min Absolute Profit = ₹100
+            - A product must have both ≥15% profit AND ≥₹100 absolute profit to be considered as meeting the target
             """)
 
 if __name__ == "__main__":
