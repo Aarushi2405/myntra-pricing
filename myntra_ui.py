@@ -57,8 +57,8 @@ def profit_percent_from_discount(discount, df):
         customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
         selling_price_after_log = selling_price - customer_shipping_charges        
         gst_amount = selling_price * gst / 100
-        commission_percent = calc_commission_charges(commission_formula, selling_price_after_log)
-        commission_amount = selling_price_after_log * commission_percent / 100
+        commission_percent = calc_commission_charges(commission_formula, selling_price)
+        commission_amount = selling_price * commission_percent / 100
         fixed_fee = calc_fixed_fee(fixed_fee_formula, selling_price_after_log)
         return_fee = selling_price_after_log * 0.02
         marketting_packing_cost = selling_price_after_log * 0.05
