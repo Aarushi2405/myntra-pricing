@@ -171,7 +171,7 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
         igst = 0.18 * commission 
         total_fees = commission + igst 
         
-        marketting_fees = 0.01 * selling_price
+        marketting_fees = 0.05 * selling_price
         total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees
 
         profit = selling_price - total_cost
