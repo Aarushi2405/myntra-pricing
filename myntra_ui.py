@@ -4,6 +4,24 @@ import openpyxl
 from datetime import datetime
 import io
 import re
+import logging
+import sys
+
+# Configure logging
+def setup_logging():
+    """Set up logging configuration for the Streamlit app"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),  # Console output
+            logging.FileHandler('myntra_pricing.log')  # File output
+        ]
+    )
+    return logging.getLogger(__name__)
+
+# Initialize logger
+logger = setup_logging()
 
 # Import functions from your existing myntra_pricing.py
 def parse_excel_if(formula: str):
@@ -42,7 +60,7 @@ def calc_fixed_fee(formula, value):
     result = dynamic_if(rules, value)
     return result
 
-def profit_percent_from_discount_myntra(discount, df):
+def profit_percent_from_discount_myntra(discount, df, show_details=False):
     """Calculate profit for Myntra portal"""
     try:
         mrp = df['MRP']
@@ -55,6 +73,7 @@ def profit_percent_from_discount_myntra(discount, df):
         fixed_fee_formula = df['Fixed Fee']
 
         selling_price = mrp - (mrp * discount / 100)
+        
         customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
         selling_price_after_log = selling_price - customer_shipping_charges        
         gst_amount = selling_price * gst / 100
@@ -67,12 +86,37 @@ def profit_percent_from_discount_myntra(discount, df):
         profit = selling_price_after_log - total_cost
         profit_percent = profit / selling_price * 100
         
+        if show_details:
+            return {
+                'profit': profit,
+                'profit_percent': profit_percent,
+                'details': {
+                    'mrp': mrp,
+                    'discount': discount,
+                    'selling_price': selling_price,
+                    'customer_shipping_charges': customer_shipping_charges,
+                    'selling_price_after_log': selling_price_after_log,
+                    'gst': gst,
+                    'gst_amount': gst_amount,
+                    'commission_percent': commission_percent,
+                    'commission_amount': commission_amount,
+                    'fixed_fee': fixed_fee,
+                    'return_fee': return_fee,
+                    'marketting_packing_cost': marketting_packing_cost,
+                    'cp': cp,
+                    'total_cost': total_cost,
+                    'profit': profit,
+                    'profit_percent': profit_percent
+                }
+            }
+        
         return profit, profit_percent
 
     except Exception as e:
+        logger.error(f"Error in Myntra profit calculation: {str(e)}")
         return 0, 0
 
-def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42):
+def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42, show_details=False):
     """Calculate profit for Ajio portal"""
     try:
         mrp = df['Listing MRP']
@@ -84,45 +128,81 @@ def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42):
         profit = selling_price - all_cost_amount - cp 
         profit_percent = profit / selling_price * 100
         
+        if show_details:
+            return {
+                'profit': profit,
+                'profit_percent': profit_percent,
+                'details': {
+                    'mrp': mrp,
+                    'discount': discount,
+                    'selling_price': selling_price,
+                    'all_cost_percent': all_cost_percent,
+                    'all_cost_amount': all_cost_amount,
+                    'cp': cp,
+                    'profit': profit,
+                    'profit_percent': profit_percent
+                }
+            }
+        
         return profit, profit_percent
 
     except Exception as e:
+        logger.error(f"Error in Ajio profit calculation: {str(e)}")
         return 0, 0
 
-def profit_percent_from_discount_tatacliq(discount, df):
+def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
     """Calculate profit for TataCliq portal"""
     try:
         mrp = df['MRP']
         cp = df['CP']
-        # shipping_charge = df['Shipping Charge']
+        gst_rate = df['GST RATE']
 
         selling_price = mrp - (mrp * discount / 100)
-        referral_fees = 0.25 * selling_price
-        igst = 0.18 * referral_fees
-        total_fees = referral_fees + igst 
+
+        gst_value = gst_rate * selling_price / 100
+
+        if selling_price < 500:
+            shipping_charge = 0
+            commission = 150
+        else:
+            shipping_charge = 118
+            commission = 0.25 * selling_price
+
+        igst = 0.18 * commission 
+        total_fees = commission + igst 
         
-
-        taxable_amount = selling_price * (100/103)
-        gst = taxable_amount * 0.03
-        shipping_charge = 118 if selling_price > 500 else 59
-
-        marketting_fees = 0.02 * selling_price
-        # net_payable = total_fees + tds + tcs
-        total_cost = gst + shipping_charge + total_fees + cp + marketting_fees
+        marketting_fees = 0.01 * selling_price
+        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees
 
         profit = selling_price - total_cost
         profit_percent = profit / selling_price * 100
 
-
-        
-        # Simple calculation: profit = 25% of selling price
-        # selling_price = mrp - (mrp * discount / 100)
-        # profit = selling_price * 0.25  # 25% profit
-        # profit_percent = 25.0  # Always 25%
+        if show_details:
+            return {
+                'profit': profit,
+                'profit_percent': profit_percent,
+                'details': {
+                    'mrp': mrp,
+                    'discount': discount,
+                    'selling_price': selling_price,
+                    'gst_rate': gst_rate,
+                    'gst_value': gst_value,
+                    'commission': commission,
+                    'igst': igst,
+                    'total_fees': total_fees,
+                    'shipping_charge': shipping_charge,
+                    'marketting_fees': marketting_fees,
+                    'cp': cp,
+                    'total_cost': total_cost,
+                    'profit': profit,
+                    'profit_percent': profit_percent
+                }
+            }
         
         return profit, profit_percent
 
     except Exception as e:
+        # logger.error(f"Error in TataCliq profit calculation: {str(e)}")
         return 0, 0
 
 def get_profit_calculation_function(portal):
@@ -134,8 +214,86 @@ def get_profit_calculation_function(portal):
     }
     return portal_functions.get(portal, profit_percent_from_discount_myntra)
 
+def display_detailed_calculations(df, portal, result_df, **kwargs):
+    """Display detailed calculations for the first 2 rows using their best discount"""
+    profit_calc_func = get_profit_calculation_function(portal)
+    
+    st.info("This section shows the detailed calculation breakdown for the first 2 products using their optimal discount rates.")
+    
+    for row_idx in range(min(2, len(df))):
+        row = df.iloc[row_idx]
+        row_index = df.index[row_idx]
+        
+        # Get the best discount from the result dataframe
+        if row_idx < len(result_df):
+            best_discount = result_df.iloc[row_idx]['Best Discount']
+            
+            if pd.isna(best_discount) or best_discount is None:
+                st.markdown(f"### Row {row_idx + 1} - {row_index}")
+                st.warning("No suitable discount found for this product")
+                st.markdown("---")
+                continue
+        else:
+            st.markdown(f"### Row {row_idx + 1} - {row_index}")
+            st.warning("No result data available for this row")
+            st.markdown("---")
+            continue
+        
+        st.markdown(f"### Row {row_idx + 1} - {row_index}")
+        st.info(f"**Best Discount: {best_discount}%**")
+        
+        try:
+            if portal == 'Ajio':
+                result = profit_calc_func(int(best_discount), row, kwargs.get('all_cost_percent', 42), show_details=True)
+            else:
+                result = profit_calc_func(int(best_discount), row, show_details=True)
+            
+            if result and 'details' in result:
+                details = result['details']
+                
+                # Create columns for better layout
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Input Variables:**")
+                    for key, value in details.items():
+                        if key in ['mrp', 'cp', 'gst', 'level', 'discount', 'all_cost_percent']:
+                            if key == 'discount':
+                                st.write(f"• **{key.replace('_', ' ').title()}:** {value}%")
+                            else:
+                                st.write(f"• **{key.replace('_', ' ').title()}:** {value}")
+                
+                with col2:
+                    st.markdown("**Calculated Values:**")
+                    for key, value in details.items():
+                        if key not in ['mrp', 'cp', 'gst', 'level', 'discount', 'all_cost_percent']:
+                            if isinstance(value, (int, float)):
+                                st.write(f"• **{key.replace('_', ' ').title()}:** ₹{value:.2f}")
+                            else:
+                                st.write(f"• **{key.replace('_', ' ').title()}:** {value}")
+                
+                # Summary
+                st.markdown("---")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Best Discount", f"{best_discount}%")
+                with col2:
+                    st.metric("Profit", f"₹{result['profit']:.2f}")
+                with col3:
+                    st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                with col4:
+                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+            
+        except Exception as e:
+            st.error(f"Error calculating for {best_discount}% discount: {str(e)}")
+        
+        st.markdown("---")
+
 def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, **kwargs):
     profit_data = []
+    
+    logger.info(f"Starting profit table build for {portal} with {len(df)} rows")
+    logger.info(f"Target profit: {target_profit_percent}%, Min absolute profit: {min_absolute_profit}")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -144,8 +302,10 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     profit_calc_func = get_profit_calculation_function(portal)
     
     for idx, (index, row) in enumerate(df.iterrows()):
-        status_text.text(f'Processing row {idx + 1} of {total_rows} for {portal}...')
-        progress_bar.progress((idx + 1) / total_rows)
+        # Update progress every 10 rows to reduce logging overhead
+        if idx % 10 == 0 or idx == total_rows - 1:
+            status_text.text(f'Processing row {idx + 1} of {total_rows} for {portal}...')
+            progress_bar.progress((idx + 1) / total_rows)
         
         row_profit = {}
         best_discount = None
@@ -180,6 +340,12 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     progress_bar.empty()
     status_text.empty()
     
+    logger.info(f"Completed processing {len(profit_data)} rows for {portal}")
+    
+    # Log summary statistics
+    products_with_target = sum(1 for row in profit_data if row.get('Best Discount') is not None)
+    logger.info(f"Summary: {products_with_target}/{len(profit_data)} products met target profit criteria")
+    
     combined_df = pd.DataFrame(profit_data, index=df.index)
     cols = combined_df.columns.tolist()
     cols.insert(0, cols.pop(cols.index('Price')))
@@ -190,6 +356,8 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
 
 def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal, **kwargs):
     try:
+        logger.info(f"Processing Excel file: {uploaded_file.name} for {portal}")
+        
         # Read the uploaded file
         wb = openpyxl.load_workbook(uploaded_file, data_only=False)
         ws = wb.active
@@ -201,6 +369,8 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         df_formulas = pd.DataFrame(data[1:], columns=data[0])
         df1 = df_formulas.iloc[:, :52]
         
+        logger.info(f"Excel file loaded with {len(df1)} rows and {len(df1.columns)} columns")
+        
         # Different column requirements based on portal
         if portal == 'Myntra':
             required_cols = ['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status', 'cp', 'gst', 'level', 
@@ -209,14 +379,14 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
             df3 = df2.copy()
             df3 = df3.set_index('ARTICLE NO')
         elif portal == 'Ajio':
-            # For Ajio and TataCliq, only need basic columns for simple calculation
+            # For Ajio, only need basic columns for simple calculation
             # required_cols = ['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status']
             required_cols = ['EAN', 'CP', 'Listing MRP']
             df2 = df1[required_cols]
             df3 = df2.copy()
             df3 = df3.set_index('EAN')
         elif portal == 'TataCliq':
-            required_cols = ['SKU Code', 'CP', 'MRP']
+            required_cols = ['SKU Code', 'CP', 'MRP', 'GST RATE']
             df2 = df1[required_cols]
             df3 = df2.copy()
             df3 = df3.set_index('SKU Code')
@@ -228,22 +398,42 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         # df3 = df3.set_index('ARTICLE NO')
         
         # Process the data
+        logger.info(f"Starting profit calculation for {portal} with {len(df3)} products")
         result_df = build_profit_table(df3, float(target_profit), float(min_absolute_profit), portal, **kwargs)
         
-        return result_df, df_formulas
+        logger.info(f"Successfully completed processing for {portal}")
+        return result_df, df_formulas, df3
         
     except Exception as e:
+        logger.error(f"Error processing file: {str(e)}")
         st.error(f"Error processing file: {str(e)}")
-        return None, None
+        return None, None, None
 
 def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_info, additional_inputs=None):
     """Create a page for a specific portal"""
     st.title(f"{portal_emoji} {portal_name} Pricing Analyzer")
     st.markdown(f"Upload your Excel file and set parameters to analyze pricing strategies for **{portal_name}**.")
-    
     # Sidebar for inputs
     with st.sidebar:
         st.header("📥 Input Parameters")
+        
+        # Logging level control
+        log_level = st.selectbox(
+            "Console Log Level",
+            ["INFO", "DEBUG", "WARNING", "ERROR"],
+            index=0,
+            help="Control the verbosity of console logs"
+        )
+        
+        # Update logging level
+        logging.getLogger().setLevel(getattr(logging, log_level))
+        
+        # Show detailed calculations toggle
+        show_detailed_calc = st.checkbox(
+            "Show Detailed Calculations",
+            value=True,
+            help="Display detailed calculation breakdown in expandable section below results table"
+        )
         
         # File upload
         uploaded_file = st.file_uploader(
@@ -293,15 +483,22 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
     with st.expander(f"ℹ️ {portal_name} Calculation Details"):
         st.markdown(calculation_info)
     
+    # Console log display area
+    with st.expander("📋 Console Logs", expanded=False):
+        st.info("Console logs will appear here when processing starts. Check the terminal/console where you ran the Streamlit app for detailed logs.")
+        st.code("Logs are also saved to 'myntra_pricing.log' file in your project directory.", language="text")
+    
     # Main content area
     if uploaded_file is not None:
         st.success(f"✅ File uploaded: {uploaded_file.name}")
         
         if process_button:
+            logger.info(f"User initiated processing for {portal_name} with target profit: {target_profit}%, min absolute profit: {min_absolute_profit}")
             with st.spinner(f"Processing your data for {portal_name}... This may take a few minutes."):
-                result_df, original_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
+                result_df, original_df, processed_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
             
             if result_df is not None:
+                logger.info(f"Processing completed successfully for {portal_name}")
                 st.success("✅ Processing completed!")
                 
                 # Display results
@@ -329,6 +526,12 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 # Display the results table
                 st.subheader("📋 Detailed Results")
                 st.dataframe(result_df, use_container_width=True)
+                
+                # Detailed calculations in expandable block
+                if show_detailed_calc:
+                    st.markdown("---")
+                    with st.expander("🔍 Detailed Calculations (First 2 Rows - Best Discount)", expanded=False):
+                        display_detailed_calculations(processed_df, portal_name, result_df, **extra_params)
                 
                 # Download section
                 st.header("💾 Download Results")
@@ -441,26 +644,33 @@ def ajio_page():
 def tatacliq_page():
     """TataCliq pricing analyzer page"""
     calculation_info = """
-    **TataCliq Calculation:**
-    - Simple profit calculation: 25% of selling price
+    **TataCliq Calculation Includes:**
     - Selling price = MRP - (MRP × discount%)
-    - Profit = Selling price × 25%
-    - Profit percentage = Always 25%
+    - GST value = GST RATE × selling price / 100
+    - Commission: ₹150 for orders < ₹500, 25% of selling price for orders ≥ ₹500
+    - IGST = 18% of commission
+    - Total fees = Commission + IGST
+    - Shipping charge: ₹0 for orders < ₹500, ₹118 for orders ≥ ₹500
+    - Marketing fees = 1% of selling price
+    - Total cost = GST value + shipping charge + total fees + CP + marketing fees
+    - Profit = Selling price - Total cost
     """
     
     data_format_info = """
     **Required columns for TataCliq:**
-    - **ARTICLE NO**: Product article number
+    - **SKU Code**: Product SKU code
+    - **CP**: Cost price
     - **MRP**: Maximum Retail Price
-    - **DISCOUNT %**: Current discount percentage
-    - **stock status**: Stock status (products with 'oosd' will be filtered out)
+    - **GST RATE**: GST percentage rate
     
-    **Note:** TataCliq uses simple 25% profit calculation, requiring only basic product information.
+    **Note:** TataCliq uses a complex calculation with variable commission and shipping charges based on order value.
     """
     
     create_portal_page("TataCliq", "🛒", calculation_info, data_format_info)
 
 def main():
+    logger.info("Starting Multi-Portal Pricing Analyzer application")
+    
     st.set_page_config(
         page_title="Multi-Portal Pricing Analyzer",
         page_icon="📊",
