@@ -127,6 +127,135 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
+def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit, df, show_details=False):
+    """
+    Find optimal MRP for Myntra portal given constant discount and target profit percentage.
+    Iterates on MRP values to find the MRP that achieves the desired profit.
+    
+    Args:
+        discount: Fixed discount percentage to apply
+        target_profit_percent: Target profit percentage to achieve
+        min_absolute_profit: Minimum absolute profit amount required
+        df: Product data row
+        show_details: Whether to return detailed calculation breakdown
+    
+    Returns:
+        tuple: (optimal_mrp, profit, profit_percent) or (None, 0, 0) if no solution found
+    """
+    try:
+        # Safely extract and convert values, handling text-formatted numbers
+        cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
+        gst = safe_convert_to_numeric(df['gst'], 'gst', 0)
+        level = safe_convert_to_numeric(df['level'], 'level', 1)
+        customer_shipping_charges_formula = df['Customer shipping charges']
+        commission_formula = df['Commission %']
+        fixed_fee_formula = df['Fixed Fee']
+
+        # Validate essential values
+        if pd.isna(cp) or cp <= 0:
+            logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
+            return None, 0, 0
+
+        # Start with a reasonable MRP based on CP, rounded to nearest 100
+        start_mrp = round(cp * 2.5 / 100) * 100
+        best_mrp = None
+        best_profit = 0
+        best_profit_percent = 0
+        
+        # Search range: from 1.5x CP to 50x CP, in steps of 100
+        min_mrp = max(100, round(cp * 1.5 / 100) * 100)  # At least ₹100
+        max_mrp = round(cp * 50 / 100) * 100  # Up to 50x CP
+        
+        # Linear search approach with steps of 100
+        # This is necessary because IF conditions in formulas can cause non-linear behavior
+        tolerance = 0  # 0.5% tolerance for profit percentage (more lenient for linear search)
+        
+        # Iterate through MRP values in steps of 100
+        for test_mrp in range(int(min_mrp), int(max_mrp) + 100, 100):
+            # Calculate profit for this MRP
+            selling_price = test_mrp - (test_mrp * discount / 100)
+            
+            customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
+            selling_price_after_log = selling_price - customer_shipping_charges        
+            gst_amount = selling_price * gst / 100
+            commission_percent = calc_commission_charges(commission_formula, selling_price)
+            commission_amount = selling_price_after_log * commission_percent / 100
+            fixed_fee = calc_fixed_fee(fixed_fee_formula, selling_price_after_log)
+            return_fee = selling_price_after_log * 0.02
+            marketting_packing_cost = selling_price_after_log * 0.1
+            total_cost = cp + gst_amount + commission_amount + fixed_fee + return_fee + marketting_packing_cost
+            profit = selling_price_after_log - total_cost
+            profit_percent = profit / selling_price * 100 if selling_price > 0 else 0
+            
+            # Check if this meets our criteria
+            if (profit_percent >= target_profit_percent - tolerance and 
+                profit >= min_absolute_profit and 
+                profit_percent <= target_profit_percent + tolerance):
+                # Found exact match within tolerance
+                best_mrp = test_mrp
+                best_profit = profit
+                best_profit_percent = profit_percent
+                break
+                
+            # Keep track of best solution so far (meets minimum criteria)
+            if (profit_percent >= target_profit_percent and 
+                profit >= min_absolute_profit and 
+                (best_mrp is None or abs(profit_percent - target_profit_percent) < abs(best_profit_percent - target_profit_percent))):
+                best_mrp = test_mrp
+                best_profit = profit
+                best_profit_percent = profit_percent
+        
+        if best_mrp is None:
+            logger.warning(f"No optimal MRP found for discount {discount}%, target profit {target_profit_percent}%")
+            return None, 0, 0
+        
+        if show_details:
+            # Recalculate with best MRP for detailed breakdown
+            selling_price = best_mrp - (best_mrp * discount / 100)
+            customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
+            selling_price_after_log = selling_price - customer_shipping_charges        
+            gst_amount = selling_price * gst / 100
+            commission_percent = calc_commission_charges(commission_formula, selling_price)
+            commission_amount = selling_price_after_log * commission_percent / 100
+            fixed_fee = calc_fixed_fee(fixed_fee_formula, selling_price_after_log)
+            return_fee = selling_price_after_log * 0.02
+            marketting_packing_cost = selling_price_after_log * 0.1
+            total_cost = cp + gst_amount + commission_amount + fixed_fee + return_fee + marketting_packing_cost
+            profit = selling_price_after_log - total_cost
+            profit_percent = profit / selling_price * 100
+            
+            return {
+                'optimal_mrp': best_mrp,
+                'profit': profit,
+                'profit_percent': profit_percent,
+                'details': {
+                    'mrp': best_mrp,
+                    'discount': discount,
+                    'selling_price': selling_price,
+                    'customer_shipping_charges': customer_shipping_charges,
+                    'selling_price_after_log': selling_price_after_log,
+                    'gst': gst,
+                    'gst_amount': gst_amount,
+                    'commission_percent': commission_percent,
+                    'commission_amount': commission_amount,
+                    'fixed_fee': fixed_fee,
+                    'return_fee': return_fee,
+                    'marketting_packing_cost': marketting_packing_cost,
+                    'cp': cp,
+                    'total_cost': total_cost,
+                    'profit': profit,
+                    'profit_percent': profit_percent
+                }
+            }
+        
+        return best_mrp, best_profit, best_profit_percent
+
+    except Exception as e:
+        logger.error(f"Error in Myntra MRP calculation: {str(e)} | Discount: {discount} | Target Profit: {target_profit_percent}% | CP: {df.get('cp', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None, 0, 0
+
 def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42, show_details=False):
     """Calculate profit for Ajio portal"""
     try:
@@ -386,6 +515,99 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
         
         st.markdown("---")
 
+def display_detailed_mrp_calculations(df, portal, result_df, **kwargs):
+    """Display detailed calculations for the first 2 rows using their optimal MRP"""
+    st.info("This section shows the detailed calculation breakdown for the first 2 products using their optimal MRP values.")
+    
+    for row_idx in range(min(15, len(df))):
+        row = df.iloc[row_idx]
+        row_index = df.index[row_idx]
+        
+        # Get the optimal MRP from the result dataframe
+        if row_idx < len(result_df):
+            optimal_mrp = result_df.iloc[row_idx]['Optimal MRP']
+            status = result_df.iloc[row_idx]['Status']
+            
+            if pd.isna(optimal_mrp) or optimal_mrp is None or status != 'Found':
+                st.markdown(f"### Row {row_idx + 1} - {row_index}")
+                st.warning(f"No optimal MRP found for this product (Status: {status})")
+                st.markdown("---")
+                continue
+        else:
+            st.markdown(f"### Row {row_idx + 1} - {row_index}")
+            st.warning("No result data available for this row")
+            st.markdown("---")
+            continue
+        
+        st.markdown(f"### Row {row_idx + 1} - {row_index}")
+        st.info(f"**Optimal MRP: ₹{optimal_mrp:.0f}**")
+        
+        try:
+            # Get parameters from kwargs
+            discount = kwargs.get('discount', 20)
+            target_profit_percent = kwargs.get('target_profit_percent', 15)
+            min_absolute_profit = kwargs.get('min_absolute_profit', 100)
+            
+            # Calculate detailed breakdown
+            result = find_optimal_mrp_myntra(
+                discount, target_profit_percent, min_absolute_profit, row, show_details=True
+            )
+            
+            if result and 'details' in result:
+                details = result['details']
+                
+                # Create columns for better layout
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Input Variables:**")
+                    st.write(f"• **Cost Price (CP):** ₹{details['cp']:.2f}")
+                    st.write(f"• **GST Rate:** {details['gst']:.1f}%")
+                    st.write(f"• **Fixed Discount:** {details['discount']:.1f}%")
+                    st.write(f"• **Target Profit:** {target_profit_percent:.1f}%")
+                    st.write(f"• **Min Absolute Profit:** ₹{min_absolute_profit:.0f}")
+                
+                with col2:
+                    st.markdown("**Calculated Values:**")
+                    st.write(f"• **Optimal MRP:** ₹{details['mrp']:.0f}")
+                    st.write(f"• **Selling Price:** ₹{details['selling_price']:.2f}")
+                    st.write(f"• **Customer Shipping:** ₹{details['customer_shipping_charges']:.2f}")
+                    st.write(f"• **Selling Price After Logistics:** ₹{details['selling_price_after_log']:.2f}")
+                    st.write(f"• **GST Amount:** ₹{details['gst_amount']:.2f}")
+                    st.write(f"• **Commission %:** {details['commission_percent']:.2f}%")
+                    st.write(f"• **Commission Amount:** ₹{details['commission_amount']:.2f}")
+                    st.write(f"• **Fixed Fee:** ₹{details['fixed_fee']:.2f}")
+                    st.write(f"• **Return Fee:** ₹{details['return_fee']:.2f}")
+                    st.write(f"• **Marketing & Packing:** ₹{details['marketting_packing_cost']:.2f}")
+                    st.write(f"• **Total Cost:** ₹{details['total_cost']:.2f}")
+                
+                # Summary
+                st.markdown("---")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Optimal MRP", f"₹{details['mrp']:.0f}")
+                with col2:
+                    st.metric("Profit", f"₹{result['profit']:.2f}")
+                with col3:
+                    st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                with col4:
+                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+                
+                # Additional info
+                st.markdown("---")
+                st.markdown("**Calculation Summary:**")
+                st.write(f"• **MRP Search Range:** ₹{max(100, round(details['cp'] * 1.5 / 100) * 100):.0f} to ₹{round(details['cp'] * 50 / 100) * 100:.0f} (in steps of ₹100)")
+                st.write(f"• **Fixed Discount Applied:** {discount:.1f}%")
+                st.write(f"• **Target Achieved:** {'✅' if result['profit_percent'] >= target_profit_percent and result['profit'] >= min_absolute_profit else '❌'}")
+            
+        except Exception as e:
+            logger.error(f"Error in detailed MRP calculation for row {row_idx}: {str(e)} | MRP: ₹{optimal_mrp:.0f} | Portal: {portal}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            st.error(f"Error calculating for MRP ₹{optimal_mrp:.0f}: {str(e)}")
+        
+        st.markdown("---")
+
 def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, **kwargs):
     profit_data = []
     
@@ -449,6 +671,69 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     cols.insert(0, cols.pop(cols.index('Price')))
     cols.insert(0, cols.pop(cols.index('Best Discount')))
     combined_df = combined_df[cols]
+    
+    return combined_df
+
+def build_mrp_table(df, discount, target_profit_percent, min_absolute_profit, portal, **kwargs):
+    """Build table for MRP calculation mode (constant discount, find optimal MRP)"""
+    mrp_data = []
+    
+    logger.info(f"Starting MRP table build for {portal} with {len(df)} rows")
+    logger.info(f"Fixed discount: {discount}%, Target profit: {target_profit_percent}%, Min absolute profit: {min_absolute_profit}")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    total_rows = len(df)
+    
+    for idx, (index, row) in enumerate(df.iterrows()):
+        # Update progress every 10 rows to reduce logging overhead
+        if idx % 10 == 0 or idx == total_rows - 1:
+            status_text.text(f'Processing row {idx + 1} of {total_rows} for {portal} MRP calculation...')
+            progress_bar.progress((idx + 1) / total_rows)
+        
+        row_mrp = {}
+        
+        try:
+            if portal == 'Myntra':
+                optimal_mrp, profit, profit_pct = find_optimal_mrp_myntra(
+                    discount, target_profit_percent, min_absolute_profit, row
+                )
+                
+                row_mrp['Optimal MRP'] = round(optimal_mrp, 2) if optimal_mrp else None
+                row_mrp['Profit'] = round(profit, 2)
+                row_mrp['Profit %'] = round(profit_pct, 2)
+                row_mrp['Selling Price'] = round(optimal_mrp - (optimal_mrp * discount / 100), 2) if optimal_mrp else None
+                row_mrp['Status'] = 'Found' if optimal_mrp else 'No Solution'
+                
+            else:
+                # For other portals, we can extend this later
+                row_mrp['Optimal MRP'] = None
+                row_mrp['Profit'] = 0
+                row_mrp['Profit %'] = 0
+                row_mrp['Selling Price'] = None
+                row_mrp['Status'] = 'Not Supported'
+                
+        except Exception as e:
+            logger.warning(f"Error calculating MRP for row {idx}: {str(e)} | Row data: {dict(row)}")
+            row_mrp['Optimal MRP'] = None
+            row_mrp['Profit'] = 0
+            row_mrp['Profit %'] = 0
+            row_mrp['Selling Price'] = None
+            row_mrp['Status'] = 'Error'
+        
+        mrp_data.append(row_mrp)
+
+    progress_bar.empty()
+    status_text.empty()
+    
+    logger.info(f"Completed processing {len(mrp_data)} rows for {portal} MRP calculation")
+    
+    # Log summary statistics
+    products_with_solution = sum(1 for row in mrp_data if row.get('Status') == 'Found')
+    logger.info(f"Summary: {products_with_solution}/{len(mrp_data)} products found optimal MRP solutions")
+    
+    combined_df = pd.DataFrame(mrp_data, index=df.index)
     
     return combined_df
 
@@ -554,8 +839,15 @@ def validate_and_convert_dataframe(df, portal, required_columns):
             original_values = df_processed[col].copy()
             df_processed[col] = df_processed[col].apply(lambda x: safe_convert_to_numeric(x, col))
             
+
             # Check for conversion issues
             conversion_count = (original_values != df_processed[col]).sum()
+            # Convert Series to scalar if needed
+            if hasattr(conversion_count, 'item'):
+                conversion_count = conversion_count.item()
+            elif hasattr(conversion_count, 'iloc'):
+                conversion_count = conversion_count.iloc[0]
+            
             if conversion_count > 0:
                 conversion_errors.append(f"Column '{col}': {conversion_count} values converted from text to numeric")
                 logger.warning(f"Column '{col}': {conversion_count} values were converted from text to numeric")
@@ -584,9 +876,9 @@ def validate_and_convert_dataframe(df, portal, required_columns):
     
     return df_processed
 
-def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal, **kwargs):
+def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal, calculation_mode='discount', **kwargs):
     try:
-        logger.info(f"Processing Excel file: {uploaded_file.name} for {portal}")
+        logger.info(f"Processing Excel file: {uploaded_file.name} for {portal} in {calculation_mode} mode")
         
         # Read the uploaded file
         wb = openpyxl.load_workbook(uploaded_file, data_only=False)
@@ -629,9 +921,16 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         # Validate and convert data types to handle text-formatted numbers
         df3 = validate_and_convert_dataframe(df3, portal, required_cols)
         
-        # Process the data
-        logger.info(f"Starting profit calculation for {portal} with {len(df3)} products")
-        result_df = build_profit_table(df3, float(target_profit), float(min_absolute_profit), portal, **kwargs)
+        # Process the data based on calculation mode
+        if calculation_mode == 'mrp':
+            logger.info(f"Starting MRP calculation for {portal} with {len(df3)} products")
+            discount = kwargs.get('discount', 20)  # Default discount if not provided
+            # Remove discount from kwargs to avoid duplicate argument error
+            kwargs_without_discount = {k: v for k, v in kwargs.items() if k != 'discount'}
+            result_df = build_mrp_table(df3, float(discount), float(target_profit), float(min_absolute_profit), portal, **kwargs_without_discount)
+        else:
+            logger.info(f"Starting profit calculation for {portal} with {len(df3)} products")
+            result_df = build_profit_table(df3, float(target_profit), float(min_absolute_profit), portal, **kwargs)
         
         logger.info(f"Successfully completed processing for {portal}")
         return result_df, df_formulas, df3
@@ -643,7 +942,7 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         st.error(f"Error processing file: {str(e)}")
         return None, None, None
 
-def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_info, additional_inputs=None):
+def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_info, additional_inputs=None, calculation_modes=None):
     """Create a page for a specific portal"""
     st.title(f"{portal_emoji} {portal_name} Pricing Analyzer")
     st.markdown(f"Upload your Excel file and set parameters to analyze pricing strategies for **{portal_name}**.")
@@ -661,6 +960,20 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         
         # Update logging level
         logging.getLogger().setLevel(getattr(logging, log_level))
+        
+        # Calculation mode selection (only for Myntra)
+        calculation_mode = 'discount'  # Default mode
+        if calculation_modes and portal_name == 'Myntra':
+            selected_mode = st.selectbox(
+                "Calculation Mode",
+                calculation_modes,
+                help="Choose between finding optimal discount or optimal MRP"
+            )
+            # Map user-friendly names to internal mode names
+            if "Find Optimal MRP" in selected_mode:
+                calculation_mode = 'mrp'
+            else:
+                calculation_mode = 'discount'
         
         # Show detailed calculations toggle
         show_detailed_calc = st.checkbox(
@@ -696,8 +1009,21 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             help="Enter the minimum absolute profit amount in rupees"
         )
         
+        # Additional inputs based on calculation mode
+        extra_params = {'calculation_mode': calculation_mode}
+        
+        # For MRP calculation mode, add discount input
+        if calculation_mode == 'mrp':
+            extra_params['discount'] = st.number_input(
+                "Fixed Discount Percentage (%)",
+                min_value=0.0,
+                max_value=99.0,
+                value=20.0,
+                step=1.0,
+                help="Enter the fixed discount percentage to apply (MRP calculation mode)"
+            )
+        
         # Portal-specific additional inputs
-        extra_params = {}
         if additional_inputs:
             for input_config in additional_inputs:
                 if input_config['type'] == 'number_input':
@@ -727,7 +1053,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         st.success(f"✅ File uploaded: {uploaded_file.name}")
         
         if process_button:
-            logger.info(f"User initiated processing for {portal_name} with target profit: {target_profit}%, min absolute profit: {min_absolute_profit}")
+            logger.info(f"User initiated processing for {portal_name} with target profit: {target_profit}%, min absolute profit: {min_absolute_profit}, mode: {calculation_mode}")
             with st.spinner(f"Processing your data for {portal_name}... This may take a few minutes."):
                 result_df, original_df, processed_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
             
@@ -736,7 +1062,8 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 st.success("✅ Processing completed!")
                 
                 # Display results
-                st.header(f"📈 Analysis Results - {portal_name}")
+                mode_text = "MRP Calculation" if calculation_mode == 'mrp' else "Discount Analysis"
+                st.header(f"📈 Analysis Results - {portal_name} ({mode_text})")
                 
                 # Summary statistics
                 col1, col2, col3, col4 = st.columns(4)
@@ -745,17 +1072,30 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                     total_products = len(result_df)
                     st.metric("Total Products", total_products)
                 
-                with col2:
-                    products_with_target = len(result_df[result_df['Best Discount'].notna()])
-                    st.metric("Products Meeting Target", products_with_target)
-                
-                with col3:
-                    success_rate = (products_with_target / total_products * 100) if total_products > 0 else 0
-                    st.metric("Success Rate", f"{success_rate:.1f}%")
-                
-                with col4:
-                    avg_profit = result_df[result_df['Price'] > 0]['Price'].mean() if len(result_df[result_df['Price'] > 0]) > 0 else 0
-                    st.metric("Avg. Profit (₹)", f"₹{avg_profit:.0f}")
+                if calculation_mode == 'mrp':
+                    with col2:
+                        products_with_solution = len(result_df[result_df['Status'] == 'Found'])
+                        st.metric("Products with Solution", products_with_solution)
+                    
+                    with col3:
+                        success_rate = (products_with_solution / total_products * 100) if total_products > 0 else 0
+                        st.metric("Success Rate", f"{success_rate:.1f}%")
+                    
+                    with col4:
+                        avg_mrp = result_df[result_df['Optimal MRP'].notna()]['Optimal MRP'].mean() if len(result_df[result_df['Optimal MRP'].notna()]) > 0 else 0
+                        st.metric("Avg. Optimal MRP (₹)", f"₹{avg_mrp:.0f}")
+                else:
+                    with col2:
+                        products_with_target = len(result_df[result_df['Best Discount'].notna()])
+                        st.metric("Products Meeting Target", products_with_target)
+                    
+                    with col3:
+                        success_rate = (products_with_target / total_products * 100) if total_products > 0 else 0
+                        st.metric("Success Rate", f"{success_rate:.1f}%")
+                    
+                    with col4:
+                        avg_profit = result_df[result_df['Price'] > 0]['Price'].mean() if len(result_df[result_df['Price'] > 0]) > 0 else 0
+                        st.metric("Avg. Profit (₹)", f"₹{avg_profit:.0f}")
                 
                 # Display the results table
                 st.subheader("📋 Detailed Results")
@@ -764,8 +1104,16 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 # Detailed calculations in expandable block
                 if show_detailed_calc:
                     st.markdown("---")
-                    with st.expander("🔍 Detailed Calculations (First 2 Rows - Best Discount)", expanded=False):
-                        display_detailed_calculations(processed_df, portal_name, result_df, **extra_params)
+                    if calculation_mode == 'discount':
+                        with st.expander("🔍 Detailed Calculations (First 2 Rows - Best Discount)", expanded=False):
+                            display_detailed_calculations(processed_df, portal_name, result_df, **extra_params)
+                    elif calculation_mode == 'mrp':
+                        with st.expander("🔍 Detailed Calculations (First 2 Rows - Optimal MRP)", expanded=False):
+                            # Add the required parameters for MRP detailed calculations
+                            mrp_kwargs = extra_params.copy()
+                            mrp_kwargs['target_profit_percent'] = target_profit
+                            mrp_kwargs['min_absolute_profit'] = min_absolute_profit
+                            display_detailed_mrp_calculations(processed_df, portal_name, result_df, **mrp_kwargs)
                 
                 # Download section
                 st.header("💾 Download Results")
@@ -820,13 +1168,17 @@ def myntra_page():
     - Return fee (2% of selling price after logistics)
     - Marketing & packing cost (5% of selling price after logistics)
     - Complex cost structure with multiple variables
+    
+    **Calculation Modes:**
+    - **Discount Analysis**: Find optimal discount percentage for given MRP to achieve target profit
+    - **MRP Calculation**: Find optimal MRP for given discount percentage to achieve target profit
     """
     
     data_format_info = """
     **Required columns for Myntra:**
     - **ARTICLE NO**: Product article number
-    - **MRP**: Maximum Retail Price (must be numeric)
-    - **DISCOUNT %**: Current discount percentage
+    - **MRP**: Maximum Retail Price (must be numeric) - used in discount analysis mode
+    - **DISCOUNT %**: Current discount percentage - used in MRP calculation mode
     - **stock status**: Stock status (products with 'oosd' will be filtered out)
     - **cp**: Cost price (must be numeric)
     - **gst**: GST percentage (must be numeric)
@@ -843,7 +1195,13 @@ def myntra_page():
     - Empty or invalid numeric values will be treated as 0
     """
     
-    create_portal_page("Myntra", "🛍️", calculation_info, data_format_info)
+    # Define calculation modes for Myntra
+    calculation_modes = [
+        "Find Optimal Discount (MRP → Discount)",
+        "Find Optimal MRP (Discount → MRP)"
+    ]
+    
+    create_portal_page("Myntra", "🛍️", calculation_info, data_format_info, calculation_modes=calculation_modes)
 
 def ajio_page():
     """Ajio pricing analyzer page"""
