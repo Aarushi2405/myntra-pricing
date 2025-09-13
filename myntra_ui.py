@@ -970,7 +970,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 help="Choose between finding optimal discount or optimal MRP"
             )
             # Map user-friendly names to internal mode names
-            if "Find Optimal MRP" in selected_mode:
+            if "MRP" in selected_mode:
                 calculation_mode = 'mrp'
             else:
                 calculation_mode = 'discount'
@@ -1197,8 +1197,8 @@ def myntra_page():
     
     # Define calculation modes for Myntra
     calculation_modes = [
-        "Find Optimal Discount (MRP → Discount)",
-        "Find Optimal MRP (Discount → MRP)"
+        "Discount (MRP → Discount)",
+        "MRP (Discount → MRP)"
     ]
     
     create_portal_page("Myntra", "🛍️", calculation_info, data_format_info, calculation_modes=calculation_modes)
