@@ -12,7 +12,7 @@ def setup_logging():
     """Set up logging configuration for the Streamlit app"""
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout),  # Console output
             logging.FileHandler('myntra_pricing.log')  # File output
@@ -63,14 +63,23 @@ def calc_fixed_fee(formula, value):
 def profit_percent_from_discount_myntra(discount, df, show_details=False):
     """Calculate profit for Myntra portal"""
     try:
-        mrp = df['MRP']
+        # Safely extract and convert values, handling text-formatted numbers
+        mrp = safe_convert_to_numeric(df['MRP'], 'MRP', 0)
         stock_status = df['stock status']
-        cp = df['cp']
-        gst = df['gst']
-        level = df['level']
+        cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
+        gst = safe_convert_to_numeric(df['gst'], 'gst', 0)
+        level = safe_convert_to_numeric(df['level'], 'level', 1)
         customer_shipping_charges_formula = df['Customer shipping charges']
         commission_formula = df['Commission %']
         fixed_fee_formula = df['Fixed Fee']
+
+        # Validate essential values
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid MRP value: {df['MRP']} (converted to {mrp})")
+            return 0, 0
+        if pd.isna(cp) or cp <= 0:
+            logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
+            return 0, 0
 
         selling_price = mrp - (mrp * discount / 100)
         
@@ -113,14 +122,25 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
         return profit, profit_percent
 
     except Exception as e:
-        logger.error(f"Error in Myntra profit calculation: {str(e)}")
+        logger.error(f"Error in Myntra profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
 def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42, show_details=False):
     """Calculate profit for Ajio portal"""
     try:
-        mrp = df['Listing MRP']
-        cp = df['CP']
+        # Safely extract and convert values, handling text-formatted numbers
+        mrp = safe_convert_to_numeric(df['Listing MRP'], 'Listing MRP', 0)
+        cp = safe_convert_to_numeric(df['CP'], 'CP', 0)
+
+        # Validate essential values
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid Listing MRP value: {df['Listing MRP']} (converted to {mrp})")
+            return 0, 0
+        if pd.isna(cp) or cp <= 0:
+            logger.warning(f"Invalid CP value: {df['CP']} (converted to {cp})")
+            return 0, 0
 
         selling_price = mrp - (mrp * discount / 100)
         all_cost_amount = selling_price * all_cost_percent / 100
@@ -147,15 +167,26 @@ def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42, show_de
         return profit, profit_percent
 
     except Exception as e:
-        logger.error(f"Error in Ajio profit calculation: {str(e)}")
+        logger.error(f"Error in Ajio profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('Listing MRP', 'N/A')} | CP: {df.get('CP', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
 def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
     """Calculate profit for TataCliq portal"""
     try:
-        mrp = df['MRP']
-        cp = df['CP']
-        gst_rate = df['GST RATE']
+        # Safely extract and convert values, handling text-formatted numbers
+        mrp = safe_convert_to_numeric(df['MRP'], 'MRP', 0)
+        cp = safe_convert_to_numeric(df['CP'], 'CP', 0)
+        gst_rate = safe_convert_to_numeric(df['GST RATE'], 'GST RATE', 0)
+
+        # Validate essential values
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid MRP value: {df['MRP']} (converted to {mrp})")
+            return 0, 0
+        if pd.isna(cp) or cp <= 0:
+            logger.warning(f"Invalid CP value: {df['CP']} (converted to {cp})")
+            return 0, 0
 
         selling_price = mrp - (mrp * discount / 100)
 
@@ -202,7 +233,69 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
         return profit, profit_percent
 
     except Exception as e:
-        # logger.error(f"Error in TataCliq profit calculation: {str(e)}")
+        logger.error(f"Error in TataCliq profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('CP', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return 0, 0
+
+def profit_percent_from_discount_nykaa(discount, df, show_details=False):
+    """Calculate profit for Nykaa portal"""
+    try:
+        # Safely extract and convert values, handling text-formatted numbers
+        mrp = safe_convert_to_numeric(df['MRP'], 'MRP', 0)
+        cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
+        gst_rate = safe_convert_to_numeric(df['gst'], 'gst', 0)
+        shipping = safe_convert_to_numeric(df['shipping'], 'shipping', 0)
+
+        # Validate essential values
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid MRP value: {df['MRP']} (converted to {mrp})")
+            return 0, 0
+        if pd.isna(cp) or cp <= 0:
+            logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
+            return 0, 0
+
+        selling_price = mrp - (mrp * discount / 100)
+        gst_value = gst_rate * selling_price / 100
+        
+        commission = 0.28 * selling_price
+        commission_tax = 0.18 * commission
+        total_commission = commission + commission_tax
+        
+        marketing_fees = 0.1 * selling_price
+        total_cost = cp + gst_value + shipping + marketing_fees + total_commission
+
+        profit = selling_price - total_cost
+        profit_percent = profit / selling_price * 100
+
+        if show_details:
+            return {
+                'profit': profit,
+                'profit_percent': profit_percent,
+                'details': {
+                    'mrp': mrp,
+                    'discount': discount,
+                    'selling_price': selling_price,
+                    'gst_rate': gst_rate,
+                    'gst_value': gst_value,
+                    'commission': commission,
+                    'commission_tax': commission_tax,
+                    'total_commission': total_commission,
+                    'shipping': shipping,
+                    'marketing_fees': marketing_fees,
+                    'cp': cp,
+                    'total_cost': total_cost,
+                    'profit': profit,
+                    'profit_percent': profit_percent
+                }
+            }
+        
+        return profit, profit_percent
+
+    except Exception as e:
+        logger.error(f"Error in Nykaa profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
 def get_profit_calculation_function(portal):
@@ -210,7 +303,8 @@ def get_profit_calculation_function(portal):
     portal_functions = {
         'Myntra': profit_percent_from_discount_myntra,
         'Ajio': profit_percent_from_discount_ajio,
-        'TataCliq': profit_percent_from_discount_tatacliq
+        'TataCliq': profit_percent_from_discount_tatacliq,
+        'Nykaa': profit_percent_from_discount_nykaa
     }
     return portal_functions.get(portal, profit_percent_from_discount_myntra)
 
@@ -285,6 +379,9 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
                     st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
             
         except Exception as e:
+            logger.error(f"Error in detailed calculation for row {row_idx}: {str(e)} | Discount: {best_discount}% | Portal: {portal}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             st.error(f"Error calculating for {best_discount}% discount: {str(e)}")
         
         st.markdown("---")
@@ -330,6 +427,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
                 prev_profit = profit_pct
 
             except Exception as e:
+                logger.warning(f"Error calculating profit for discount {discount}% in row {idx}: {str(e)} | Row data: {dict(row)}")
                 row_profit[f'{discount}%'] = None
 
         row_profit['Best Discount'] = best_discount
@@ -353,6 +451,138 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     combined_df = combined_df[cols]
     
     return combined_df
+
+def safe_convert_to_numeric(value, column_name="", default_value=0):
+    """
+    Safely convert a value to numeric, handling text-formatted numbers from Excel.
+    
+    Args:
+        value: The value to convert
+        column_name: Name of the column for error reporting
+        default_value: Default value to return if conversion fails
+    
+    Returns:
+        Numeric value or default_value if conversion fails
+    """
+    # Handle Series objects by taking the first value
+    if isinstance(value, pd.Series):
+        if len(value) == 0:
+            return default_value
+        value = value.iloc[0]
+    
+    # Handle None and NaN values
+    if value is None:
+        return default_value
+    
+    try:
+        if pd.isna(value):
+            return default_value
+    except (ValueError, TypeError):
+        # If pd.isna fails, treat as non-null and continue
+        pass
+    
+    # If already numeric, return as is
+    if isinstance(value, (int, float)):
+        return value
+    
+    # Convert string to numeric
+    if isinstance(value, str):
+        # Remove common text formatting that might interfere
+        cleaned_value = value.strip().replace(',', '').replace('₹', '').replace('$', '').replace('%', '')
+        
+        # Handle empty strings
+        if not cleaned_value:
+            return default_value
+        
+        try:
+            # Try to convert to float first, then int if it's a whole number
+            numeric_value = float(cleaned_value)
+            if numeric_value.is_integer():
+                return int(numeric_value)
+            return numeric_value
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Could not convert '{value}' to numeric in column '{column_name}': {str(e)}. Using default value {default_value}")
+            return default_value
+    
+    # For other types, try direct conversion
+    try:
+        # Handle numpy types
+        if hasattr(value, 'item'):
+            value = value.item()
+        return float(value)
+    except (ValueError, TypeError, AttributeError) as e:
+        logger.warning(f"Could not convert {type(value).__name__} '{value}' to numeric in column '{column_name}': {str(e)}. Using default value {default_value}")
+        return default_value
+
+def validate_and_convert_dataframe(df, portal, required_columns):
+    """
+    Validate and convert DataFrame columns to appropriate data types.
+    
+    Args:
+        df: DataFrame to process
+        portal: Portal name for error reporting
+        required_columns: List of required columns for the portal
+    
+    Returns:
+        Processed DataFrame with converted data types
+    """
+    logger.info(f"Validating and converting data types for {portal}")
+    logger.info(f"DataFrame columns: {list(df.columns)} | Index: {df.index.names}")
+    logger.info(f"Required columns: {required_columns}")
+    
+    # Create a copy to avoid modifying original
+    df_processed = df.copy()
+    
+    # Define numeric columns for each portal (exclude identifier columns like SKU Code, ARTICLE NO, EAN)
+    numeric_columns = {
+        'Myntra': ['MRP', 'cp', 'gst', 'level'],
+        'Ajio': ['CP', 'Listing MRP'],
+        'TataCliq': ['CP', 'MRP', 'GST RATE'],
+        'Nykaa': ['MRP', 'cp', 'gst', 'shipping']
+    }
+    
+    # Define identifier columns that should remain as text
+    identifier_columns = ['SKU Code', 'ARTICLE NO', 'EAN', 'SKU', 'Product Code', 'Item Code']
+    
+    # Get numeric columns for current portal
+    portal_numeric_cols = numeric_columns.get(portal, [])
+    
+    # Convert numeric columns (exclude identifier columns)
+    conversion_errors = []
+    for col in portal_numeric_cols:
+        if col in df_processed.columns and col not in identifier_columns:
+            original_values = df_processed[col].copy()
+            df_processed[col] = df_processed[col].apply(lambda x: safe_convert_to_numeric(x, col))
+            
+            # Check for conversion issues
+            conversion_count = (original_values != df_processed[col]).sum()
+            if conversion_count > 0:
+                conversion_errors.append(f"Column '{col}': {conversion_count} values converted from text to numeric")
+                logger.warning(f"Column '{col}': {conversion_count} values were converted from text to numeric")
+        elif col in identifier_columns:
+            logger.info(f"Column '{col}' is an identifier column, keeping as text")
+    
+    # Check for missing required columns (exclude identifier columns that are used as index)
+    missing_columns = []
+    for col in required_columns:
+        # Check if column exists in DataFrame columns or as index
+        if col not in df_processed.columns and col not in df_processed.index.names:
+            missing_columns.append(col)
+    
+    if missing_columns:
+        error_msg = f"Missing required columns for {portal}: {missing_columns} | Available columns: {list(df_processed.columns)} | Index: {df_processed.index.names}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # Display conversion summary to user
+    if conversion_errors:
+        st.warning("⚠️ **Data Type Conversion Applied**")
+        st.write("The following columns had text-formatted numbers that were automatically converted:")
+        for error in conversion_errors:
+            st.write(f"• {error}")
+        st.info("💡 **Tip**: To avoid this in the future, ensure numeric columns in Excel are formatted as 'Number' instead of 'Text'.")
+    
+    return df_processed
 
 def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal, **kwargs):
     try:
@@ -390,12 +620,14 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
             df2 = df1[required_cols]
             df3 = df2.copy()
             df3 = df3.set_index('SKU Code')
+        elif portal == 'Nykaa':
+            required_cols = ['SKU Code', 'MRP', 'cp', 'gst', 'shipping']
+            df2 = df1[required_cols]
+            df3 = df2.copy()
+            df3 = df3.set_index('SKU Code')
         
-        # df2 = df1[required_cols]
-        
-        # df3 = df2.copy()
-        # df3 = df3[df3['stock status'] != 'oosd']
-        # df3 = df3.set_index('ARTICLE NO')
+        # Validate and convert data types to handle text-formatted numbers
+        df3 = validate_and_convert_dataframe(df3, portal, required_cols)
         
         # Process the data
         logger.info(f"Starting profit calculation for {portal} with {len(df3)} products")
@@ -405,7 +637,9 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         return result_df, df_formulas, df3
         
     except Exception as e:
-        logger.error(f"Error processing file: {str(e)}")
+        logger.error(f"Error processing file: {str(e)} | File: {uploaded_file.name if uploaded_file else 'Unknown'} | Portal: {portal}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         st.error(f"Error processing file: {str(e)}")
         return None, None, None
 
@@ -591,17 +825,22 @@ def myntra_page():
     data_format_info = """
     **Required columns for Myntra:**
     - **ARTICLE NO**: Product article number
-    - **MRP**: Maximum Retail Price
+    - **MRP**: Maximum Retail Price (must be numeric)
     - **DISCOUNT %**: Current discount percentage
     - **stock status**: Stock status (products with 'oosd' will be filtered out)
-    - **cp**: Cost price
-    - **gst**: GST percentage
-    - **level**: Product level
+    - **cp**: Cost price (must be numeric)
+    - **gst**: GST percentage (must be numeric)
+    - **level**: Product level (must be numeric)
     - **Customer shipping charges**: Shipping charges formula
     - **Commission %**: Commission percentage formula
     - **Fixed Fee**: Fixed fee formula
     
-    **Note:** Myntra requires complex formula-based columns for detailed calculations.
+    **Important Data Format Notes:**
+    - Numeric columns (MRP, cp, gst, level) should be formatted as **Number** in Excel, not Text
+    - Identifier columns (ARTICLE NO) should remain as **Text** format
+    - If numeric columns are formatted as Text, the system will automatically convert them
+    - Formula columns can contain Excel formulas like "IF(A1<500,50,0)"
+    - Empty or invalid numeric values will be treated as 0
     """
     
     create_portal_page("Myntra", "🛍️", calculation_info, data_format_info)
@@ -619,10 +858,15 @@ def ajio_page():
     data_format_info = """
     **Required columns for Ajio:**
     - **EAN**: Product EAN code
-    - **CP**: Cost price
-    - **Listing MRP**: Maximum Retail Price
+    - **CP**: Cost price (must be numeric)
+    - **Listing MRP**: Maximum Retail Price (must be numeric)
     
-    **Note:** Ajio calculation uses configurable all-cost percentage for profit calculation.
+    **Important Data Format Notes:**
+    - Numeric columns (CP, Listing MRP) should be formatted as **Number** in Excel, not Text
+    - Identifier columns (EAN) should remain as **Text** format
+    - If numeric columns are formatted as Text, the system will automatically convert them
+    - Empty or invalid numeric values will be treated as 0
+    - Ajio calculation uses configurable all-cost percentage for profit calculation
     """
     
     # Additional inputs specific to Ajio
@@ -651,7 +895,7 @@ def tatacliq_page():
     - IGST = 18% of commission
     - Total fees = Commission + IGST
     - Shipping charge: ₹0 for orders < ₹500, ₹118 for orders ≥ ₹500
-    - Marketing fees = 1% of selling price
+    - Marketing fees = 5% of selling price
     - Total cost = GST value + shipping charge + total fees + CP + marketing fees
     - Profit = Selling price - Total cost
     """
@@ -659,14 +903,51 @@ def tatacliq_page():
     data_format_info = """
     **Required columns for TataCliq:**
     - **SKU Code**: Product SKU code
-    - **CP**: Cost price
-    - **MRP**: Maximum Retail Price
-    - **GST RATE**: GST percentage rate
+    - **CP**: Cost price (must be numeric)
+    - **MRP**: Maximum Retail Price (must be numeric)
+    - **GST RATE**: GST percentage rate (must be numeric)
     
-    **Note:** TataCliq uses a complex calculation with variable commission and shipping charges based on order value.
+    **Important Data Format Notes:**
+    - Numeric columns (CP, MRP, GST RATE) should be formatted as **Number** in Excel, not Text
+    - Identifier columns (SKU Code) should remain as **Text** format
+    - If numeric columns are formatted as Text, the system will automatically convert them
+    - Empty or invalid numeric values will be treated as 0
+    - TataCliq uses a complex calculation with variable commission and shipping charges based on order value
     """
     
     create_portal_page("TataCliq", "🛒", calculation_info, data_format_info)
+
+def nykaa_page():
+    """Nykaa pricing analyzer page"""
+    calculation_info = """
+    **Nykaa Calculation Includes:**
+    - Selling price = MRP - (MRP × discount%)
+    - GST value = GST rate × selling price / 100
+    - Commission = 28% of selling price
+    - Commission tax = 18% of commission
+    - Total commission = Commission + Commission tax
+    - Marketing fees = 1% of selling price
+    - Total cost = CP + GST value + shipping + marketing fees + total commission
+    - Profit = Selling price - Total cost
+    """
+    
+    data_format_info = """
+    **Required columns for Nykaa:**
+    - **SKU Code**: Product SKU code
+    - **MRP**: Maximum Retail Price (must be numeric)
+    - **cp**: Cost price (must be numeric)
+    - **gst**: GST percentage rate (must be numeric)
+    - **shipping**: Shipping charges (must be numeric)
+    
+    **Important Data Format Notes:**
+    - Numeric columns (MRP, cp, gst, shipping) should be formatted as **Number** in Excel, not Text
+    - Identifier columns (SKU Code) should remain as **Text** format
+    - If numeric columns are formatted as Text, the system will automatically convert them
+    - Empty or invalid numeric values will be treated as 0
+    - Nykaa uses a fixed commission structure with 28% commission plus 18% tax on commission
+    """
+    
+    create_portal_page("Nykaa", "💄", calculation_info, data_format_info)
 
 def main():
     logger.info("Starting Multi-Portal Pricing Analyzer application")
@@ -681,9 +962,10 @@ def main():
     myntra_page_obj = st.Page(myntra_page, title="Myntra Portal", icon="🛍️")
     ajio_page_obj = st.Page(ajio_page, title="Ajio Portal", icon="🏪")
     tatacliq_page_obj = st.Page(tatacliq_page, title="TataCliq Portal", icon="🛒")
+    nykaa_page_obj = st.Page(nykaa_page, title="Nykaa Portal", icon="💄")
     
     # Create navigation
-    pg = st.navigation([myntra_page_obj, ajio_page_obj, tatacliq_page_obj])
+    pg = st.navigation([myntra_page_obj, ajio_page_obj, tatacliq_page_obj, nykaa_page_obj])
     
     # Run the selected page
     pg.run()
