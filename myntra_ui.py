@@ -273,7 +273,7 @@ def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42, show_de
             return 0, 0
 
         selling_price = mrp - (mrp * discount / 100)
-        gst_value = selling_price * gst
+        gst_value = selling_price * gst / 100
         comission = selling_price * 0.35
         comission_gst = comission * 0.18
         total_comission = comission + comission_gst
