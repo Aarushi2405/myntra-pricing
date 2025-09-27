@@ -560,6 +560,63 @@ def profit_percent_from_discount_nykaa(discount, df, show_details=False):
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
+def profit_percent_from_discount_pepperfry(discount, df, all_cost_percent=42, show_details=False):
+    """Calculate profit for Pepperfry portal"""
+    try:
+        # Safely extract and convert values, handling text-formatted numbers
+        mrp = safe_convert_to_numeric(df['mrp'], 'mrp', 0)
+        cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
+        gst = safe_convert_to_numeric(df['gst'], 'gst', 0)
+
+        # Validate essential values
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid Listing MRP value: {df['mrp']} (converted to {mrp})")
+            return 0, 0
+        if pd.isna(cp) or cp <= 0:
+            logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
+            return 0, 0
+
+        selling_price = mrp - (mrp * discount / 100)
+        gst_value = selling_price * gst / 100
+        comission = selling_price * 0.35
+        comission_gst = comission * 0
+        total_comission = comission + comission_gst
+        marketting = selling_price * 0.1
+
+        total_cost = marketting + total_comission + gst_value + cp
+        
+        profit = selling_price - total_cost
+        profit_percent = profit / selling_price * 100
+        
+        if show_details:
+            return {
+                'profit': profit,
+                'profit_percent': profit_percent,
+                'details': {
+                    'mrp': mrp,
+                    'discount': discount,
+                    'selling_price': selling_price,
+                    'all_cost_percent': all_cost_percent,
+                    'gst_value': gst_value,
+                    'comission': comission,
+                    'comission_gst': comission_gst,
+                    'total_comission': total_comission,
+                    'marketting': marketting,
+                    'total_cost': total_cost,
+                    'cp': cp,
+                    'profit': profit,
+                    'profit_percent': profit_percent
+                }
+            }
+        
+        return profit, profit_percent
+
+    except Exception as e:
+        logger.error(f"Error in Pepperfry profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('mrp', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return 0, 0
+
 def get_profit_calculation_function(portal, use_nine_ending=False):
     """Return the appropriate profit calculation function based on portal and pricing strategy"""
     if portal == 'TataCliq' and use_nine_ending:
@@ -569,7 +626,8 @@ def get_profit_calculation_function(portal, use_nine_ending=False):
         'Myntra': profit_percent_from_discount_myntra,
         'Ajio': profit_percent_from_discount_ajio,
         'TataCliq': profit_percent_from_discount_tatacliq,
-        'Nykaa': profit_percent_from_discount_nykaa
+        'Nykaa': profit_percent_from_discount_nykaa,
+        'Pepperfry': profit_percent_from_discount_pepperfry
     }
     return portal_functions.get(portal, profit_percent_from_discount_myntra)
 
@@ -1069,11 +1127,12 @@ def validate_and_convert_dataframe(df, portal, required_columns):
         'Myntra': ['MRP', 'cp', 'gst', 'level'],
         'Ajio': ['CP', 'Listing MRP', 'GST'],
         'TataCliq': ['CP', 'MRP', 'GST RATE'],
-        'Nykaa': ['MRP', 'cp', 'gst', 'shipping']
+        'Nykaa': ['MRP', 'cp', 'gst', 'shipping'],
+        'Pepperfry': ['cp', 'mrp', 'gst']
     }
     
     # Define identifier columns that should remain as text
-    identifier_columns = ['SKU Code', 'ARTICLE NO', 'EAN', 'SKU', 'Product Code', 'Item Code']
+    identifier_columns = ['SKU Code', 'ARTICLE NO', 'EAN', 'SKU', 'Product Code', 'Item Code', 'van']
     
     # Get numeric columns for current portal
     portal_numeric_cols = numeric_columns.get(portal, [])
@@ -1163,6 +1222,11 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
             df2 = df1[required_cols]
             df3 = df2.copy()
             df3 = df3.set_index('SKU Code')
+        elif portal == 'Pepperfry':
+            required_cols = ['van', 'cp', 'mrp', 'gst']
+            df2 = df1[required_cols]
+            df3 = df2.copy()
+            df3 = df3.set_index('van')
         
         # Validate and convert data types to handle text-formatted numbers
         df3 = validate_and_convert_dataframe(df3, portal, required_cols)
@@ -1575,6 +1639,52 @@ def nykaa_page():
     
     create_portal_page("Nykaa", "💄", calculation_info, data_format_info)
 
+def pepperfry_page():
+    """Pepperfry pricing analyzer page"""
+    calculation_info = """
+    **Pepperfry Calculation:**
+    - Selling price = Listing MRP - (Listing MRP × discount%)
+    - GST value = GST × selling price / 100
+    - Commission = 35% of selling price
+    - Commission GST = 18% of commission
+    - Total commission = Commission + Commission GST
+    - Marketing = 10% of selling price
+    - Total cost = Marketing + Total commission + GST value + CP
+    - Profit = Selling price - Total cost
+    - Profit percentage = Profit / Selling price × 100
+    """
+    
+    data_format_info = """
+    **Required columns for Pepperfry:**
+    - **EAN**: Product EAN code
+    - **CP**: Cost price (must be numeric)
+    - **Listing MRP**: Maximum Retail Price (must be numeric)
+    - **GST**: GST percentage (must be numeric)
+    
+    **Important Data Format Notes:**
+    - Numeric columns (CP, Listing MRP, GST) should be formatted as **Number** in Excel, not Text
+    - Identifier columns (EAN) should remain as **Text** format
+    - If numeric columns are formatted as Text, the system will automatically convert them
+    - Empty or invalid numeric values will be treated as 0
+    - Pepperfry calculation uses the same structure as Ajio with 35% commission and 10% marketing
+    """
+    
+    # Additional inputs specific to Pepperfry (same as Ajio)
+    additional_inputs = [
+        {
+            'type': 'number_input',
+            'key': 'all_cost_percent',
+            'label': 'All Cost Percentage (%)',
+            'min_value': 0.0,
+            'max_value': 100.0,
+            'value': 42.0,
+            'step': 0.1,
+            'help': 'Enter the percentage of selling price that represents all costs (default: 42%)'
+        }
+    ]
+    
+    create_portal_page("Pepperfry", "🪑", calculation_info, data_format_info, additional_inputs)
+
 def main():
     logger.info("Starting Multi-Portal Pricing Analyzer application")
     
@@ -1589,9 +1699,10 @@ def main():
     ajio_page_obj = st.Page(ajio_page, title="Ajio Portal", icon="🏪")
     tatacliq_page_obj = st.Page(tatacliq_page, title="TataCliq Portal", icon="🛒")
     nykaa_page_obj = st.Page(nykaa_page, title="Nykaa Portal", icon="💄")
+    pepperfry_page_obj = st.Page(pepperfry_page, title="Pepperfry Portal", icon="🪑")
     
     # Create navigation
-    pg = st.navigation([myntra_page_obj, ajio_page_obj, tatacliq_page_obj, nykaa_page_obj])
+    pg = st.navigation([myntra_page_obj, ajio_page_obj, tatacliq_page_obj, nykaa_page_obj, pepperfry_page_obj])
     
     # Run the selected page
     pg.run()
