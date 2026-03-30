@@ -60,6 +60,36 @@ def calc_fixed_fee(formula, value):
     result = dynamic_if(rules, value)
     return result
 
+def round_selling_price_myntra(price):
+    """
+    Round a selling price to end in 49 or 99.
+    If the next higher 49/99 is within 10, round up to it.
+    Otherwise round down to the nearest 49/99.
+    Examples: 145 -> 149, 135 -> 99, 295 -> 299, 260 -> 249
+    """
+    if price <= 0:
+        return price
+
+    hundred = int(price / 100) * 100
+    candidates = []
+    for h in [hundred - 100, hundred, hundred + 100]:
+        for end in [49, 99]:
+            val = h + end
+            if val > 0:
+                candidates.append(val)
+
+    lower_candidates = [c for c in candidates if c <= price]
+    higher_candidates = [c for c in candidates if c >= price]
+
+    lower = max(lower_candidates) if lower_candidates else None
+    higher = min(higher_candidates) if higher_candidates else None
+
+    if higher is not None and (higher - price) <= 10:
+        return higher
+    elif lower is not None:
+        return lower
+    return higher
+
 def profit_percent_from_discount_myntra(discount, df, show_details=False):
     """Calculate profit for Myntra portal"""
     try:
@@ -72,6 +102,8 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
         customer_shipping_charges_formula = df['Customer shipping charges']
         commission_formula = df['Commission %']
         fixed_fee_formula = df['Fixed Fee']
+        mbb_td = safe_convert_to_numeric(df.get('MBB TD', 0), 'MBB TD', 0)
+        mbb_rebate_pct = safe_convert_to_numeric(df.get('MBB Rebate', 0), 'MBB Rebate', 0)
 
         # Validate essential values
         if pd.isna(mrp) or mrp <= 0:
@@ -81,20 +113,23 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
             logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
             return 0, 0
 
-        selling_price = mrp - (mrp * discount / 100)
-        
+        selling_price = round_selling_price_myntra(mrp - (mrp * discount / 100))
+
         customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
-        selling_price_after_log = selling_price - customer_shipping_charges        
+        selling_price_after_log = selling_price - customer_shipping_charges
         gst_amount = selling_price * gst / 100
         commission_percent = calc_commission_charges(commission_formula, selling_price_after_log)
         commission_amount = selling_price_after_log * commission_percent / 100
         fixed_fee = calc_fixed_fee(fixed_fee_formula, selling_price_after_log)
+        commission_gst = commission_amount * 0.18
+        fixed_fee_gst = fixed_fee * 0.18
+        gross_settlement = selling_price_after_log - (commission_amount + commission_gst) - (fixed_fee + fixed_fee_gst)
         return_fee = selling_price_after_log * 0.02
         marketting_packing_cost = selling_price_after_log * 0.1
-        total_cost = cp + gst_amount + commission_amount + fixed_fee + return_fee + marketting_packing_cost
-        profit = selling_price_after_log - total_cost
+        mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if (mbb_td > 0 and discount >= mbb_td) else 0
+        profit = gross_settlement - cp - gst_amount - return_fee - marketting_packing_cost + mbb_rebate
         profit_percent = profit / selling_price * 100
-        
+
         if show_details:
             return {
                 'profit': profit,
@@ -109,11 +144,16 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
                     'gst_amount': gst_amount,
                     'commission_percent': commission_percent,
                     'commission_amount': commission_amount,
+                    'commission_gst': commission_gst,
                     'fixed_fee': fixed_fee,
+                    'fixed_fee_gst': fixed_fee_gst,
+                    'gross_settlement': gross_settlement,
                     'return_fee': return_fee,
                     'marketting_packing_cost': marketting_packing_cost,
+                    'mbb_td': mbb_td,
+                    'mbb_rebate_pct': mbb_rebate_pct,
+                    'mbb_rebate': mbb_rebate,
                     'cp': cp,
-                    'total_cost': total_cost,
                     'profit': profit,
                     'profit_percent': profit_percent
                 }
@@ -150,6 +190,8 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
         customer_shipping_charges_formula = df['Customer shipping charges']
         commission_formula = df['Commission %']
         fixed_fee_formula = df['Fixed Fee']
+        mbb_td = safe_convert_to_numeric(df.get('MBB TD', 0), 'MBB TD', 0)
+        mbb_rebate_pct = safe_convert_to_numeric(df.get('MBB Rebate', 0), 'MBB Rebate', 0)
 
         # Validate essential values
         if pd.isna(cp) or cp <= 0:
@@ -173,18 +215,21 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
         # Iterate through MRP values in steps of 100
         for test_mrp in range(int(min_mrp), int(max_mrp) + 100, 100):
             # Calculate profit for this MRP
-            selling_price = test_mrp - (test_mrp * discount / 100)
-            
+            selling_price = round_selling_price_myntra(test_mrp - (test_mrp * discount / 100))
+
             customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
             selling_price_after_log = selling_price - customer_shipping_charges        
             gst_amount = selling_price * gst / 100
             commission_percent = calc_commission_charges(commission_formula, selling_price_after_log)
             commission_amount = selling_price_after_log * commission_percent / 100
             fixed_fee = calc_fixed_fee(fixed_fee_formula, selling_price_after_log)
+            commission_gst = commission_amount * 0.18
+            fixed_fee_gst = fixed_fee * 0.18
+            gross_settlement = selling_price_after_log - (commission_amount + commission_gst) - (fixed_fee + fixed_fee_gst)
             return_fee = selling_price_after_log * 0.02
             marketting_packing_cost = selling_price_after_log * 0.1
-            total_cost = cp + gst_amount + commission_amount + fixed_fee + return_fee + marketting_packing_cost
-            profit = selling_price_after_log - total_cost
+            mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if (mbb_td > 0 and discount >= mbb_td) else 0
+            profit = gross_settlement - cp - gst_amount - return_fee - marketting_packing_cost + mbb_rebate
             profit_percent = profit / selling_price * 100 if selling_price > 0 else 0
             
             # Check if this meets our criteria
@@ -211,19 +256,22 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
         
         if show_details:
             # Recalculate with best MRP for detailed breakdown
-            selling_price = best_mrp - (best_mrp * discount / 100)
+            selling_price = round_selling_price_myntra(best_mrp - (best_mrp * discount / 100))
             customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
             selling_price_after_log = selling_price - customer_shipping_charges        
             gst_amount = selling_price * gst / 100
             commission_percent = calc_commission_charges(commission_formula, selling_price_after_log)
             commission_amount = selling_price_after_log * commission_percent / 100
             fixed_fee = calc_fixed_fee(fixed_fee_formula, selling_price_after_log)
+            commission_gst = commission_amount * 0.18
+            fixed_fee_gst = fixed_fee * 0.18
+            gross_settlement = selling_price_after_log - (commission_amount + commission_gst) - (fixed_fee + fixed_fee_gst)
             return_fee = selling_price_after_log * 0.02
             marketting_packing_cost = selling_price_after_log * 0.1
-            total_cost = cp + gst_amount + commission_amount + fixed_fee + return_fee + marketting_packing_cost
-            profit = selling_price_after_log - total_cost
+            mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if (mbb_td > 0 and discount >= mbb_td) else 0
+            profit = gross_settlement - cp - gst_amount - return_fee - marketting_packing_cost + mbb_rebate
             profit_percent = profit / selling_price * 100
-            
+
             return {
                 'optimal_mrp': best_mrp,
                 'profit': profit,
@@ -238,11 +286,16 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
                     'gst_amount': gst_amount,
                     'commission_percent': commission_percent,
                     'commission_amount': commission_amount,
+                    'commission_gst': commission_gst,
                     'fixed_fee': fixed_fee,
+                    'fixed_fee_gst': fixed_fee_gst,
+                    'gross_settlement': gross_settlement,
                     'return_fee': return_fee,
                     'marketting_packing_cost': marketting_packing_cost,
+                    'mbb_td': mbb_td,
+                    'mbb_rebate_pct': mbb_rebate_pct,
+                    'mbb_rebate': mbb_rebate,
                     'cp': cp,
-                    'total_cost': total_cost,
                     'profit': profit,
                     'profit_percent': profit_percent
                 }
@@ -691,15 +744,28 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
                 
                 # Summary
                 st.markdown("---")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Best Discount", f"{best_discount}%")
-                with col2:
-                    st.metric("Profit", f"₹{result['profit']:.2f}")
-                with col3:
-                    st.metric("Profit %", f"{result['profit_percent']:.2f}%")
-                with col4:
-                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+                if 'gross_settlement' in details:
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    with col1:
+                        st.metric("Best Discount", f"{best_discount}%")
+                    with col2:
+                        st.metric("Gross Settlement", f"₹{details['gross_settlement']:.2f}")
+                    with col3:
+                        st.metric("Profit", f"₹{result['profit']:.2f}")
+                    with col4:
+                        st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                    with col5:
+                        st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+                else:
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Best Discount", f"{best_discount}%")
+                    with col2:
+                        st.metric("Profit", f"₹{result['profit']:.2f}")
+                    with col3:
+                        st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                    with col4:
+                        st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
             
         except Exception as e:
             logger.error(f"Error in detailed calculation for row {row_idx}: {str(e)} | Discount: {best_discount}% | Portal: {portal}")
@@ -770,21 +836,25 @@ def display_detailed_mrp_calculations(df, portal, result_df, **kwargs):
                     st.write(f"• **GST Amount:** ₹{details['gst_amount']:.2f}")
                     st.write(f"• **Commission %:** {details['commission_percent']:.2f}%")
                     st.write(f"• **Commission Amount:** ₹{details['commission_amount']:.2f}")
+                    st.write(f"• **Commission GST (18%):** ₹{details['commission_gst']:.2f}")
                     st.write(f"• **Fixed Fee:** ₹{details['fixed_fee']:.2f}")
+                    st.write(f"• **Fixed Fee GST (18%):** ₹{details['fixed_fee_gst']:.2f}")
+                    st.write(f"• **Gross Settlement:** ₹{details['gross_settlement']:.2f}")
                     st.write(f"• **Return Fee:** ₹{details['return_fee']:.2f}")
                     st.write(f"• **Marketing & Packing:** ₹{details['marketting_packing_cost']:.2f}")
-                    st.write(f"• **Total Cost:** ₹{details['total_cost']:.2f}")
                 
                 # Summary
                 st.markdown("---")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
                     st.metric("Optimal MRP", f"₹{details['mrp']:.0f}")
                 with col2:
-                    st.metric("Profit", f"₹{result['profit']:.2f}")
+                    st.metric("Gross Settlement", f"₹{details['gross_settlement']:.2f}")
                 with col3:
-                    st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                    st.metric("Profit", f"₹{result['profit']:.2f}")
                 with col4:
+                    st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                with col5:
                     st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
                 
                 # Additional info
@@ -804,6 +874,7 @@ def display_detailed_mrp_calculations(df, portal, result_df, **kwargs):
 
 def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, **kwargs):
     profit_data = []
+    profit_data_abs = []
     
     logger.info(f"Starting profit table build for {portal} with {len(df)} rows")
     logger.info(f"Target profit: {target_profit_percent}%, Min absolute profit: {min_absolute_profit}")
@@ -827,11 +898,17 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
             progress_bar.progress((idx + 1) / total_rows)
         
         row_profit = {}
-        best_discount = None
-        best_profit = 0
+        row_profit_abs = {}
+        best_discount_no_rebate = None
+        best_profit_no_rebate = 0
+        best_discount_with_rebate = None
+        best_profit_with_rebate = 0
+        best_selling_price = None
         prev_profit = None
         weird_jumps = []
-        
+
+        mbb_td_row = safe_convert_to_numeric(row.get('MBB TD', 0), 'MBB TD', 0) if portal == 'Myntra' else 0
+
         for discount in range(1, 100):
             try:
                 if portal == 'Ajio':
@@ -839,23 +916,68 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
                 else:
                     profit, profit_pct = profit_calc_func(discount, row)
                 row_profit[f'{discount}%'] = round(profit_pct, 2)
-                
-                if profit_pct >= target_profit_percent and profit > min_absolute_profit:
-                    best_discount = discount
-                    best_profit = profit
+                row_profit_abs[f'{discount}%'] = round(profit, 2)
 
-                if prev_profit is not None and profit_pct > 15 and profit_pct > prev_profit + 0.01:
+                if profit_pct >= target_profit_percent and profit > min_absolute_profit:
+                    if mbb_td_row > 0 and discount >= mbb_td_row:
+                        best_discount_with_rebate = discount
+                        best_profit_with_rebate = profit
+                    else:
+                        best_discount_no_rebate = discount
+                        best_profit_no_rebate = profit
+
+                if prev_profit is not None and profit_pct > 15 and profit_pct > prev_profit + 0.01 and discount != mbb_td_row:
                     weird_jumps.append(discount)
                 prev_profit = profit_pct
 
             except Exception as e:
                 logger.warning(f"Error calculating profit for discount {discount}% in row {idx}: {str(e)} | Row data: {dict(row)}")
                 row_profit[f'{discount}%'] = None
+                row_profit_abs[f'{discount}%'] = None
+
+        # Pick the zone (with or without rebate) that gives better profit.
+        # Within each zone the highest qualifying discount is already tracked.
+        if best_discount_with_rebate is not None and best_profit_with_rebate >= best_profit_no_rebate:
+            best_discount = best_discount_with_rebate
+            best_profit = best_profit_with_rebate
+        else:
+            best_discount = best_discount_no_rebate
+            best_profit = best_profit_no_rebate
+
+        if best_discount is not None:
+            try:
+                if portal == 'Ajio':
+                    detail_result = profit_calc_func(best_discount, row, kwargs.get('all_cost_percent', 42), show_details=True)
+                else:
+                    detail_result = profit_calc_func(best_discount, row, show_details=True)
+                if isinstance(detail_result, dict):
+                    best_selling_price = detail_result['details'].get('selling_price')
+            except Exception as e:
+                logger.warning(f"Error fetching selling price for best discount in row {idx}: {str(e)}")
+
+        # Profit at the MBB TD threshold discount
+        if portal == 'Myntra' and mbb_td_row > 0:
+            try:
+                mbb_profit_abs, mbb_profit_pct = profit_calc_func(int(mbb_td_row), row)
+                row_profit['MBB TD Discount'] = int(mbb_td_row)
+                row_profit['Profit at MBB TD'] = round(mbb_profit_abs, 2)
+                row_profit['Profit % at MBB TD'] = round(mbb_profit_pct, 2)
+            except Exception as e:
+                logger.warning(f"Error calculating profit at MBB TD for row {idx}: {str(e)}")
+                row_profit['MBB TD Discount'] = int(mbb_td_row)
+                row_profit['Profit at MBB TD'] = None
+                row_profit['Profit % at MBB TD'] = None
 
         row_profit['Best Discount'] = best_discount
-        row_profit['Price'] = best_profit
+        row_profit['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
+        row_profit['Best Profit (₹)'] = best_profit
         row_profit['Weird Profit Jump'] = ','.join(str(x) for x in weird_jumps)
         profit_data.append(row_profit)
+
+        row_profit_abs['Best Discount'] = best_discount
+        row_profit_abs['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
+        row_profit_abs['Best Profit (₹)'] = best_profit
+        profit_data_abs.append(row_profit_abs)
 
     progress_bar.empty()
     status_text.empty()
@@ -866,13 +988,20 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     products_with_target = sum(1 for row in profit_data if row.get('Best Discount') is not None)
     logger.info(f"Summary: {products_with_target}/{len(profit_data)} products met target profit criteria")
     
-    combined_df = pd.DataFrame(profit_data, index=df.index)
-    cols = combined_df.columns.tolist()
-    cols.insert(0, cols.pop(cols.index('Price')))
-    cols.insert(0, cols.pop(cols.index('Best Discount')))
-    combined_df = combined_df[cols]
-    
-    return combined_df
+    def _reorder(df_in):
+        cols = df_in.columns.tolist()
+        for c in ['Best Profit (₹)', 'Best Selling Price', 'Best Discount']:
+            if c in cols:
+                cols.insert(0, cols.pop(cols.index(c)))
+        for mbb_col in ['Profit % at MBB TD', 'Profit at MBB TD', 'MBB TD Discount']:
+            if mbb_col in cols:
+                cols.insert(0, cols.pop(cols.index(mbb_col)))
+        return df_in[cols]
+
+    combined_df = _reorder(pd.DataFrame(profit_data, index=df.index))
+    combined_abs_df = _reorder(pd.DataFrame(profit_data_abs, index=df.index))
+
+    return combined_df, combined_abs_df
 
 def build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profit, portal, **kwargs):
     """Optimized profit table build for TataCliq nine-ending pricing strategy"""
@@ -899,7 +1028,7 @@ def build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profi
                 # Skip invalid rows
                 profit_data.append({
                     'Best Discount': None,
-                    'Price': 0,
+                    'Best Profit (₹)': 0,
                     'Weird Profit Jump': '',
                     'Best Selling Price': None
                 })
@@ -942,7 +1071,7 @@ def build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profi
                     row_profit[f'{int(discount)}%'] = None
 
             row_profit['Best Discount'] = best_discount
-            row_profit['Price'] = best_profit
+            row_profit['Best Profit (₹)'] = best_profit
             row_profit['Best Selling Price'] = best_selling_price
             row_profit['Weird Profit Jump'] = ','.join(str(x) for x in weird_jumps)
             profit_data.append(row_profit)
@@ -951,7 +1080,7 @@ def build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profi
             logger.warning(f"Error processing row {idx}: {str(e)} | Row data: {dict(row)}")
             profit_data.append({
                 'Best Discount': None,
-                'Price': 0,
+                'Best Profit (₹)': 0,
                 'Best Selling Price': None,
                 'Weird Profit Jump': ''
             })
@@ -967,16 +1096,15 @@ def build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profi
     
     combined_df = pd.DataFrame(profit_data, index=df.index)
     cols = combined_df.columns.tolist()
-    
-    # Reorder columns to put important ones first
-    priority_cols = ['Price', 'Best Discount', 'Best Selling Price']
+
+    priority_cols = ['Best Profit (₹)', 'Best Discount', 'Best Selling Price']
     for col in priority_cols:
         if col in cols:
             cols.insert(0, cols.pop(cols.index(col)))
-    
+
     combined_df = combined_df[cols]
-    
-    return combined_df
+
+    return combined_df, None
 
 def build_mrp_table(df, discount, target_profit_percent, min_absolute_profit, portal, **kwargs):
     """Build table for MRP calculation mode (constant discount, find optimal MRP)"""
@@ -1200,9 +1328,11 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         
         # Different column requirements based on portal
         if portal == 'Myntra':
-            required_cols = ['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status', 'cp', 'gst', 'level', 
+            required_cols = ['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status', 'cp', 'gst', 'level',
                            'Customer shipping charges', 'Commission %', 'Fixed Fee']
-            df2 = df1[required_cols]
+            optional_cols = ['MBB TD', 'MBB Rebate']
+            cols_to_use = required_cols + [c for c in optional_cols if c in df1.columns]
+            df2 = df1[cols_to_use]
             df3 = df2.copy()
             df3 = df3.set_index('ARTICLE NO')
         elif portal == 'Ajio':
@@ -1232,18 +1362,18 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         df3 = validate_and_convert_dataframe(df3, portal, required_cols)
         
         # Process the data based on calculation mode
+        abs_profit_df = None
         if calculation_mode == 'mrp':
             logger.info(f"Starting MRP calculation for {portal} with {len(df3)} products")
-            discount = kwargs.get('discount', 20)  # Default discount if not provided
-            # Remove discount from kwargs to avoid duplicate argument error
+            discount = kwargs.get('discount', 20)
             kwargs_without_discount = {k: v for k, v in kwargs.items() if k != 'discount'}
             result_df = build_mrp_table(df3, float(discount), float(target_profit), float(min_absolute_profit), portal, **kwargs_without_discount)
         else:
             logger.info(f"Starting profit calculation for {portal} with {len(df3)} products")
-            result_df = build_profit_table(df3, float(target_profit), float(min_absolute_profit), portal, **kwargs)
-        
+            result_df, abs_profit_df = build_profit_table(df3, float(target_profit), float(min_absolute_profit), portal, **kwargs)
+
         logger.info(f"Successfully completed processing for {portal}")
-        return result_df, df_formulas, df3
+        return result_df, df_formulas, df3, abs_profit_df
         
     except Exception as e:
         logger.error(f"Error processing file: {str(e)} | File: {uploaded_file.name if uploaded_file else 'Unknown'} | Portal: {portal}")
@@ -1371,7 +1501,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         if process_button:
             logger.info(f"User initiated processing for {portal_name} with target profit: {target_profit}%, min absolute profit: {min_absolute_profit}, mode: {calculation_mode}")
             with st.spinner(f"Processing your data for {portal_name}... This may take a few minutes."):
-                result_df, original_df, processed_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
+                result_df, original_df, processed_df, abs_profit_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
             
             if result_df is not None:
                 logger.info(f"Processing completed successfully for {portal_name}")
@@ -1410,7 +1540,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                         st.metric("Success Rate", f"{success_rate:.1f}%")
                     
                     with col4:
-                        avg_profit = result_df[result_df['Price'] > 0]['Price'].mean() if len(result_df[result_df['Price'] > 0]) > 0 else 0
+                        avg_profit = result_df[result_df['Best Profit (₹)'] > 0]['Best Profit (₹)'].mean() if len(result_df[result_df['Best Profit (₹)'] > 0]) > 0 else 0
                         st.metric("Avg. Profit (₹)", f"₹{avg_profit:.0f}")
                 
                 # Display the results table
@@ -1440,6 +1570,8 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     result_df.to_excel(writer, sheet_name=f'{portal_name} Analysis')
+                    if abs_profit_df is not None:
+                        abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
                     if original_df is not None:
                         original_df.to_excel(writer, sheet_name='Original Data', index=False)
                 
