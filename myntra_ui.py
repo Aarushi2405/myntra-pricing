@@ -95,22 +95,21 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
     try:
         # Safely extract and convert values, handling text-formatted numbers
         mrp = safe_convert_to_numeric(df['MRP'], 'MRP', 0)
-        stock_status = df['stock status']
-        cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
-        gst = safe_convert_to_numeric(df['gst'], 'gst', 0)
-        level = safe_convert_to_numeric(df['level'], 'level', 1)
-        customer_shipping_charges_formula = df['Customer shipping charges']
-        commission_formula = df['Commission %']
-        fixed_fee_formula = df['Fixed Fee']
-        mbb_td = safe_convert_to_numeric(df.get('MBB TD', 0), 'MBB TD', 0)
-        mbb_rebate_pct = safe_convert_to_numeric(df.get('MBB Rebate', 0), 'MBB Rebate', 0)
+        cp = safe_convert_to_numeric(df['CP'], 'CP', 0)
+        gst = safe_convert_to_numeric(df['GST'], 'GST', 0)
+        customer_shipping_charges_formula = df['SHIPPING']
+        commission_formula = df['COMMISSION %']
+        fixed_fee_formula = df['FIXED FEE']
+        mbb_td = safe_convert_to_numeric(df.get('REBATE TD', 0), 'REBATE TD', 0)
+        mbb_rebate_pct = safe_convert_to_numeric(df.get('REBATE VALUE', 0), 'REBATE VALUE', 0)
+        mbb_rsp = safe_convert_to_numeric(df.get('REBATE SP', 0), 'REBATE SP', 0)
 
         # Validate essential values
         if pd.isna(mrp) or mrp <= 0:
             logger.warning(f"Invalid MRP value: {df['MRP']} (converted to {mrp})")
             return 0, 0
         if pd.isna(cp) or cp <= 0:
-            logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
+            logger.warning(f"Invalid CP value: {df['CP']} (converted to {cp})")
             return 0, 0
 
         selling_price = round_selling_price_myntra(mrp - (mrp * discount / 100))
@@ -126,7 +125,8 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
         gross_settlement = selling_price_after_log - (commission_amount + commission_gst) - (fixed_fee + fixed_fee_gst)
         return_fee = selling_price_after_log * 0.02
         marketting_packing_cost = selling_price_after_log * 0.1
-        mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if (mbb_td > 0 and discount >= mbb_td) else 0
+        rebate_qualifies = (mbb_rsp > 0 and selling_price < mbb_rsp) or (mbb_td > 0 and discount >= mbb_td)
+        mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if rebate_qualifies else 0
         profit = gross_settlement - cp - gst_amount - return_fee - marketting_packing_cost + mbb_rebate
         profit_percent = profit / selling_price * 100
 
@@ -162,7 +162,7 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
         return profit, profit_percent
 
     except Exception as e:
-        logger.error(f"Error in Myntra profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        logger.error(f"Error in Myntra profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('CP', 'N/A')}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
@@ -184,18 +184,18 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
     """
     try:
         # Safely extract and convert values, handling text-formatted numbers
-        cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
-        gst = safe_convert_to_numeric(df['gst'], 'gst', 0)
-        level = safe_convert_to_numeric(df['level'], 'level', 1)
-        customer_shipping_charges_formula = df['Customer shipping charges']
-        commission_formula = df['Commission %']
-        fixed_fee_formula = df['Fixed Fee']
-        mbb_td = safe_convert_to_numeric(df.get('MBB TD', 0), 'MBB TD', 0)
-        mbb_rebate_pct = safe_convert_to_numeric(df.get('MBB Rebate', 0), 'MBB Rebate', 0)
+        cp = safe_convert_to_numeric(df['CP'], 'CP', 0)
+        gst = safe_convert_to_numeric(df['GST'], 'GST', 0)
+        customer_shipping_charges_formula = df['SHIPPING']
+        commission_formula = df['COMMISSION %']
+        fixed_fee_formula = df['FIXED FEE']
+        mbb_td = safe_convert_to_numeric(df.get('REBATE TD', 0), 'REBATE TD', 0)
+        mbb_rebate_pct = safe_convert_to_numeric(df.get('REBATE VALUE', 0), 'REBATE VALUE', 0)
+        mbb_rsp = safe_convert_to_numeric(df.get('REBATE SP', 0), 'REBATE SP', 0)
 
         # Validate essential values
         if pd.isna(cp) or cp <= 0:
-            logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
+            logger.warning(f"Invalid CP value: {df['CP']} (converted to {cp})")
             return None, 0, 0
 
         # Start with a reasonable MRP based on CP, rounded to nearest 100
@@ -228,10 +228,11 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
             gross_settlement = selling_price_after_log - (commission_amount + commission_gst) - (fixed_fee + fixed_fee_gst)
             return_fee = selling_price_after_log * 0.02
             marketting_packing_cost = selling_price_after_log * 0.1
-            mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if (mbb_td > 0 and discount >= mbb_td) else 0
+            rebate_qualifies = (mbb_rsp > 0 and selling_price < mbb_rsp) or (mbb_td > 0 and discount >= mbb_td)
+            mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if rebate_qualifies else 0
             profit = gross_settlement - cp - gst_amount - return_fee - marketting_packing_cost + mbb_rebate
             profit_percent = profit / selling_price * 100 if selling_price > 0 else 0
-            
+
             # Check if this meets our criteria
             if (profit_percent >= target_profit_percent - tolerance and 
                 profit >= min_absolute_profit and 
@@ -268,7 +269,8 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
             gross_settlement = selling_price_after_log - (commission_amount + commission_gst) - (fixed_fee + fixed_fee_gst)
             return_fee = selling_price_after_log * 0.02
             marketting_packing_cost = selling_price_after_log * 0.1
-            mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if (mbb_td > 0 and discount >= mbb_td) else 0
+            rebate_qualifies = (mbb_rsp > 0 and selling_price < mbb_rsp) or (mbb_td > 0 and discount >= mbb_td)
+            mbb_rebate = (mbb_rebate_pct / 100 * selling_price_after_log) if rebate_qualifies else 0
             profit = gross_settlement - cp - gst_amount - return_fee - marketting_packing_cost + mbb_rebate
             profit_percent = profit / selling_price * 100
 
@@ -304,7 +306,7 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
         return best_mrp, best_profit, best_profit_percent
 
     except Exception as e:
-        logger.error(f"Error in Myntra MRP calculation: {str(e)} | Discount: {discount} | Target Profit: {target_profit_percent}% | CP: {df.get('cp', 'N/A')}")
+        logger.error(f"Error in Myntra MRP calculation: {str(e)} | Discount: {discount} | Target Profit: {target_profit_percent}% | CP: {df.get('CP', 'N/A')}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None, 0, 0
@@ -727,7 +729,7 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
                 with col1:
                     st.markdown("**Input Variables:**")
                     for key, value in details.items():
-                        if key in ['mrp', 'cp', 'gst', 'level', 'discount', 'all_cost_percent']:
+                        if key in ['mrp', 'cp', 'gst', 'discount', 'all_cost_percent']:
                             if key == 'discount':
                                 st.write(f"• **{key.replace('_', ' ').title()}:** {value}%")
                             else:
@@ -736,7 +738,7 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
                 with col2:
                     st.markdown("**Calculated Values:**")
                     for key, value in details.items():
-                        if key not in ['mrp', 'cp', 'gst', 'level', 'discount', 'all_cost_percent']:
+                        if key not in ['mrp', 'cp', 'gst', 'discount', 'all_cost_percent']:
                             if isinstance(value, (int, float)):
                                 st.write(f"• **{key.replace('_', ' ').title()}:** ₹{value:.2f}")
                             else:
@@ -907,7 +909,8 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         prev_profit = None
         weird_jumps = []
 
-        mbb_td_row = safe_convert_to_numeric(row.get('MBB TD', 0), 'MBB TD', 0) if portal == 'Myntra' else 0
+        mbb_td_row = safe_convert_to_numeric(row.get('REBATE TD', 0), 'REBATE TD', 0) if portal == 'Myntra' else 0
+        mbb_rsp_row = safe_convert_to_numeric(row.get('REBATE SP', 0), 'REBATE SP', 0) if portal == 'Myntra' else 0
 
         for discount in range(1, 100):
             try:
@@ -919,7 +922,10 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
                 row_profit_abs[f'{discount}%'] = round(profit, 2)
 
                 if profit_pct >= target_profit_percent and profit > min_absolute_profit:
-                    if mbb_td_row > 0 and discount >= mbb_td_row:
+                    mrp_row = safe_convert_to_numeric(row.get('MRP', 0), 'MRP', 0)
+                    sp = round_selling_price_myntra(mrp_row - (mrp_row * discount / 100)) if mrp_row > 0 else 0
+                    rebate_active = (mbb_rsp_row > 0 and sp < mbb_rsp_row) or (mbb_td_row > 0 and discount >= mbb_td_row)
+                    if rebate_active:
                         best_discount_with_rebate = discount
                         best_profit_with_rebate = profit
                     else:
@@ -955,18 +961,18 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
             except Exception as e:
                 logger.warning(f"Error fetching selling price for best discount in row {idx}: {str(e)}")
 
-        # Profit at the MBB TD threshold discount
+        # Profit at the REBATE TD threshold discount
         if portal == 'Myntra' and mbb_td_row > 0:
             try:
                 mbb_profit_abs, mbb_profit_pct = profit_calc_func(int(mbb_td_row), row)
-                row_profit['MBB TD Discount'] = int(mbb_td_row)
-                row_profit['Profit at MBB TD'] = round(mbb_profit_abs, 2)
-                row_profit['Profit % at MBB TD'] = round(mbb_profit_pct, 2)
+                row_profit['REBATE TD Discount'] = int(mbb_td_row)
+                row_profit['Profit at REBATE TD'] = round(mbb_profit_abs, 2)
+                row_profit['Profit % at REBATE TD'] = round(mbb_profit_pct, 2)
             except Exception as e:
                 logger.warning(f"Error calculating profit at MBB TD for row {idx}: {str(e)}")
-                row_profit['MBB TD Discount'] = int(mbb_td_row)
-                row_profit['Profit at MBB TD'] = None
-                row_profit['Profit % at MBB TD'] = None
+                row_profit['REBATE TD Discount'] = int(mbb_td_row)
+                row_profit['Profit at REBATE TD'] = None
+                row_profit['Profit % at REBATE TD'] = None
 
         row_profit['Best Discount'] = best_discount
         row_profit['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
@@ -993,7 +999,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         for c in ['Best Profit (₹)', 'Best Selling Price', 'Best Discount']:
             if c in cols:
                 cols.insert(0, cols.pop(cols.index(c)))
-        for mbb_col in ['Profit % at MBB TD', 'Profit at MBB TD', 'MBB TD Discount']:
+        for mbb_col in ['Profit % at REBATE TD', 'Profit at REBATE TD', 'REBATE TD Discount']:
             if mbb_col in cols:
                 cols.insert(0, cols.pop(cols.index(mbb_col)))
         return df_in[cols]
@@ -1252,7 +1258,7 @@ def validate_and_convert_dataframe(df, portal, required_columns):
     
     # Define numeric columns for each portal (exclude identifier columns like SKU Code, ARTICLE NO, EAN)
     numeric_columns = {
-        'Myntra': ['MRP', 'cp', 'gst', 'level'],
+        'Myntra': ['MRP', 'CP', 'GST'],
         'Ajio': ['CP', 'Listing MRP', 'GST'],
         'TataCliq': ['CP', 'MRP', 'GST RATE'],
         'Nykaa': ['MRP', 'cp', 'gst', 'shipping'],
@@ -1328,9 +1334,9 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         
         # Different column requirements based on portal
         if portal == 'Myntra':
-            required_cols = ['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status', 'cp', 'gst', 'level',
-                           'Customer shipping charges', 'Commission %', 'Fixed Fee']
-            optional_cols = ['MBB TD', 'MBB Rebate']
+            required_cols = ['ARTICLE NO', 'MRP', 'CP', 'GST',
+                           'SHIPPING', 'COMMISSION %', 'FIXED FEE']
+            optional_cols = ['REBATE TD', 'REBATE SP', 'REBATE VALUE']
             cols_to_use = required_cols + [c for c in optional_cols if c in df1.columns]
             df2 = df1[cols_to_use]
             df3 = df2.copy()
@@ -1589,11 +1595,29 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
     
     else:
         st.info("👆 Please upload an Excel file to get started.")
-        
+
+        # Template download
+        template_columns = {
+            'Myntra': ['ARTICLE NO', 'MRP', 'CP', 'GST',
+                       'SHIPPING', 'COMMISSION %', 'FIXED FEE', 'REBATE TD', 'REBATE SP', 'REBATE VALUE'],
+            'Ajio': ['EAN', 'CP', 'Listing MRP', 'GST'],
+            'TataCliq': ['SKU Code', 'CP', 'MRP', 'GST RATE'],
+        }
+        cols = template_columns.get(portal_name)
+        if cols:
+            template_output = io.BytesIO()
+            pd.DataFrame(columns=cols).to_excel(template_output, index=False)
+            st.download_button(
+                label="📄 Download Template",
+                data=template_output.getvalue(),
+                file_name=f'{portal_name.lower()}_template.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+
         # Show sample data format
         with st.expander("📋 Expected Data Format"):
             st.markdown(data_format_info)
-        
+
         # Show parameter explanation
         with st.expander("ℹ️ Parameter Explanation"):
             st.markdown(f"""
@@ -1625,18 +1649,20 @@ def myntra_page():
     data_format_info = """
     **Required columns for Myntra:**
     - **ARTICLE NO**: Product article number
-    - **MRP**: Maximum Retail Price (must be numeric) - used in discount analysis mode
-    - **DISCOUNT %**: Current discount percentage - used in MRP calculation mode
-    - **stock status**: Stock status (products with 'oosd' will be filtered out)
-    - **cp**: Cost price (must be numeric)
-    - **gst**: GST percentage (must be numeric)
-    - **level**: Product level (must be numeric)
-    - **Customer shipping charges**: Shipping charges formula
-    - **Commission %**: Commission percentage formula
-    - **Fixed Fee**: Fixed fee formula
-    
+    - **MRP**: Maximum Retail Price (must be numeric)
+    - **CP**: Cost price (must be numeric)
+    - **GST**: GST percentage (must be numeric)
+    - **SHIPPING**: Shipping charges formula
+    - **COMMISSION %**: Commission percentage formula
+    - **FIXED FEE**: Fixed fee formula
+
+    **Optional columns:**
+    - **REBATE TD**: Minimum discount % threshold to qualify for rebate
+    - **REBATE SP**: Recommended selling price — rebate applies if selling price is below this
+    - **REBATE VALUE**: Rebate percentage of selling price after logistics
+
     **Important Data Format Notes:**
-    - Numeric columns (MRP, cp, gst, level) should be formatted as **Number** in Excel, not Text
+    - Numeric columns (MRP, CP, GST) should be formatted as **Number** in Excel, not Text
     - Identifier columns (ARTICLE NO) should remain as **Text** format
     - If numeric columns are formatted as Text, the system will automatically convert them
     - Formula columns can contain Excel formulas like "IF(A1<500,50,0)"
