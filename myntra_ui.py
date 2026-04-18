@@ -60,20 +60,21 @@ def calc_fixed_fee(formula, value):
     result = dynamic_if(rules, value)
     return result
 
-def round_selling_price_myntra(price):
+def round_selling_price_myntra(price, endings=None):
     """
-    Round a selling price to end in 49 or 99.
-    If the next higher 49/99 is within 10, round up to it.
-    Otherwise round down to the nearest 49/99.
-    Examples: 145 -> 149, 135 -> 99, 295 -> 299, 260 -> 249
+    Round a selling price to end in one of the specified endings (default: [49, 99]).
+    If the next higher candidate is within 10, round up to it.
+    Otherwise round down to the nearest candidate.
     """
+    if endings is None:
+        endings = [49, 99]
     if price <= 0:
         return price
 
     hundred = int(price / 100) * 100
     candidates = []
     for h in [hundred - 100, hundred, hundred + 100]:
-        for end in [49, 99]:
+        for end in endings:
             val = h + end
             if val > 0:
                 candidates.append(val)
@@ -90,7 +91,7 @@ def round_selling_price_myntra(price):
         return lower
     return higher
 
-def profit_percent_from_discount_myntra(discount, df, show_details=False):
+def profit_percent_from_discount_myntra(discount, df, show_details=False, price_endings=None):
     """Calculate profit for Myntra portal"""
     try:
         # Safely extract and convert values, handling text-formatted numbers
@@ -112,7 +113,7 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
             logger.warning(f"Invalid CP value: {df['CP']} (converted to {cp})")
             return 0, 0
 
-        selling_price = round_selling_price_myntra(mrp - (mrp * discount / 100))
+        selling_price = round_selling_price_myntra(mrp - (mrp * discount / 100), endings=price_endings)
 
         customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
         selling_price_after_log = selling_price - customer_shipping_charges
@@ -167,7 +168,7 @@ def profit_percent_from_discount_myntra(discount, df, show_details=False):
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
-def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit, df, show_details=False):
+def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit, df, show_details=False, price_endings=None):
     """
     Find optimal MRP for Myntra portal given constant discount and target profit percentage.
     Iterates on MRP values to find the MRP that achieves the desired profit.
@@ -215,10 +216,10 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
         # Iterate through MRP values in steps of 100
         for test_mrp in range(int(min_mrp), int(max_mrp) + 100, 100):
             # Calculate profit for this MRP
-            selling_price = round_selling_price_myntra(test_mrp - (test_mrp * discount / 100))
+            selling_price = round_selling_price_myntra(test_mrp - (test_mrp * discount / 100), endings=price_endings)
 
             customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
-            selling_price_after_log = selling_price - customer_shipping_charges        
+            selling_price_after_log = selling_price - customer_shipping_charges
             gst_amount = selling_price * gst / 100
             commission_percent = calc_commission_charges(commission_formula, selling_price_after_log)
             commission_amount = selling_price_after_log * commission_percent / 100
@@ -257,9 +258,9 @@ def find_optimal_mrp_myntra(discount, target_profit_percent, min_absolute_profit
         
         if show_details:
             # Recalculate with best MRP for detailed breakdown
-            selling_price = round_selling_price_myntra(best_mrp - (best_mrp * discount / 100))
+            selling_price = round_selling_price_myntra(best_mrp - (best_mrp * discount / 100), endings=price_endings)
             customer_shipping_charges = calc_customer_shipping_charges(customer_shipping_charges_formula, selling_price)
-            selling_price_after_log = selling_price - customer_shipping_charges        
+            selling_price_after_log = selling_price - customer_shipping_charges
             gst_amount = selling_price * gst / 100
             commission_percent = calc_commission_charges(commission_formula, selling_price_after_log)
             commission_amount = selling_price_after_log * commission_percent / 100
@@ -912,10 +913,13 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         mbb_td_row = safe_convert_to_numeric(row.get('REBATE TD', 0), 'REBATE TD', 0) if portal == 'Myntra' else 0
         mbb_rsp_row = safe_convert_to_numeric(row.get('REBATE SP', 0), 'REBATE SP', 0) if portal == 'Myntra' else 0
 
+        price_endings = kwargs.get('price_endings', None)
         for discount in range(1, 100):
             try:
                 if portal == 'Ajio':
                     profit, profit_pct = profit_calc_func(discount, row, kwargs.get('all_cost_percent', 42))
+                elif portal == 'Myntra':
+                    profit, profit_pct = profit_calc_func(discount, row, price_endings=price_endings)
                 else:
                     profit, profit_pct = profit_calc_func(discount, row)
                 row_profit[f'{discount}%'] = round(profit_pct, 2)
@@ -923,7 +927,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
 
                 if profit_pct >= target_profit_percent and profit > min_absolute_profit:
                     mrp_row = safe_convert_to_numeric(row.get('MRP', 0), 'MRP', 0)
-                    sp = round_selling_price_myntra(mrp_row - (mrp_row * discount / 100)) if mrp_row > 0 else 0
+                    sp = round_selling_price_myntra(mrp_row - (mrp_row * discount / 100), endings=price_endings) if mrp_row > 0 else 0
                     rebate_active = (mbb_rsp_row > 0 and sp < mbb_rsp_row) or (mbb_td_row > 0 and discount >= mbb_td_row)
                     if rebate_active:
                         best_discount_with_rebate = discount
@@ -1135,13 +1139,14 @@ def build_mrp_table(df, discount, target_profit_percent, min_absolute_profit, po
         try:
             if portal == 'Myntra':
                 optimal_mrp, profit, profit_pct = find_optimal_mrp_myntra(
-                    discount, target_profit_percent, min_absolute_profit, row
+                    discount, target_profit_percent, min_absolute_profit, row,
+                    price_endings=kwargs.get('price_endings', None)
                 )
                 
                 row_mrp['Optimal MRP'] = round(optimal_mrp, 2) if optimal_mrp else None
                 row_mrp['Profit'] = round(profit, 2)
                 row_mrp['Profit %'] = round(profit_pct, 2)
-                row_mrp['Selling Price'] = round(optimal_mrp - (optimal_mrp * discount / 100), 2) if optimal_mrp else None
+                row_mrp['Selling Price'] = round_selling_price_myntra(optimal_mrp - (optimal_mrp * discount / 100), endings=kwargs.get('price_endings', None)) if optimal_mrp else None
                 row_mrp['Status'] = 'Found' if optimal_mrp else 'No Solution'
                 
             else:
@@ -1487,6 +1492,14 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                         value=input_config.get('default', False),
                         help=input_config.get('help', '')
                     )
+                elif input_config['type'] == 'multiselect':
+                    selected = st.multiselect(
+                        input_config['label'],
+                        options=input_config.get('options', []),
+                        default=input_config.get('default', []),
+                        help=input_config.get('help', '')
+                    )
+                    extra_params[input_config['key']] = selected if selected else input_config.get('default', [])
         
         # Process button
         process_button = st.button("🚀 Process Data", type="primary")
@@ -1674,8 +1687,19 @@ def myntra_page():
         "Discount (mrp → discount)",
         "MRP (discount → mrp)"
     ]
-    
-    create_portal_page("Myntra", "🛍️", calculation_info, data_format_info, calculation_modes=calculation_modes)
+
+    additional_inputs = [
+        {
+            'key': 'price_endings',
+            'type': 'multiselect',
+            'label': 'Price Ending Options',
+            'options': [29, 49, 79, 99],
+            'default': [29, 49, 79, 99],
+            'help': 'Round selling prices to end with one of these values (e.g. 249, 299, 279, 299)'
+        }
+    ]
+
+    create_portal_page("Myntra", "🛍️", calculation_info, data_format_info, additional_inputs=additional_inputs, calculation_modes=calculation_modes)
 
 def ajio_page():
     """Ajio pricing analyzer page"""
