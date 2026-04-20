@@ -958,6 +958,8 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
             try:
                 if portal == 'Ajio':
                     detail_result = profit_calc_func(best_discount, row, kwargs.get('all_cost_percent', 42), show_details=True)
+                elif portal == 'Myntra':
+                    detail_result = profit_calc_func(best_discount, row, show_details=True, price_endings=price_endings)
                 else:
                     detail_result = profit_calc_func(best_discount, row, show_details=True)
                 if isinstance(detail_result, dict):
@@ -968,7 +970,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         # Profit at the REBATE TD threshold discount
         if portal == 'Myntra' and mbb_td_row > 0:
             try:
-                mbb_profit_abs, mbb_profit_pct = profit_calc_func(int(mbb_td_row), row)
+                mbb_profit_abs, mbb_profit_pct = profit_calc_func(int(mbb_td_row), row, price_endings=price_endings)
                 row_profit['REBATE TD Discount'] = int(mbb_td_row)
                 row_profit['Profit at REBATE TD'] = round(mbb_profit_abs, 2)
                 row_profit['Profit % at REBATE TD'] = round(mbb_profit_pct, 2)
@@ -1867,25 +1869,220 @@ def pepperfry_page():
     
     create_portal_page("Pepperfry", "🪑", calculation_info, data_format_info, additional_inputs)
 
+def commission_analysis_page():
+    """Commission comparison page for Aapno Rajasthan, Tayhaa, Aura, MYEH"""
+    st.title("📊 Commission Comparison")
+    st.markdown("Upload a commission Excel file to compare rates across **Aapno Rajasthan, Tayhaa, Aura** and **MYEH**.")
+
+    uploaded = st.file_uploader("Upload Commission Excel", type=["xlsx", "xls"])
+    if uploaded is None:
+        st.info("Upload the commission file to get started.")
+        return
+
+    try:
+        df_raw = pd.read_excel(uploaded, sheet_name="Sheet1", header=None)
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+        return
+
+    price_bands = ["0-300", "300-500", "500-1000", "1000-2000", "2000-100000"]
+    brand_cols = {
+        "Aapno":  [11, 12, 13, 14, 15],
+        "Tayhaa": [26, 27, 28, 29, 30],
+        "Aura":   [39, 40, 41, 42, 43],
+        "MYEH":   [52, 53, 54, 55, 56],
+    }
+    brands = list(brand_cols.keys())
+
+    # Parse data
+    rows = []
+    for _, row in df_raw.iloc[2:].iterrows():
+        article = row[1]
+        if pd.isna(article) or str(article).strip() in ["", "-", "NaN"]:
+            continue
+        entry = {"Article Type": str(article).strip()}
+        for brand, cols in brand_cols.items():
+            for band, col in zip(price_bands, cols):
+                val = row[col]
+                try:
+                    entry[f"{brand}_{band}"] = float(val) if not pd.isna(val) else None
+                except Exception:
+                    entry[f"{brand}_{band}"] = None
+        rows.append(entry)
+
+    import numpy as np
+    data = pd.DataFrame(rows).drop_duplicates("Article Type").reset_index(drop=True)
+
+    # Build summary
+    summary_rows = []
+    for _, row in data.iterrows():
+        cat = row["Article Type"]
+        for band in price_bands:
+            vals = {b: row[f"{b}_{band}"] for b in brands}
+            valid = {b: v for b, v in vals.items() if v is not None and not np.isnan(v)}
+            if not valid:
+                continue
+            min_val = min(valid.values())
+            winners = [b for b, v in valid.items() if v == min_val]
+            summary_rows.append({
+                "Category": cat,
+                "Price Band": band,
+                "Cheapest Brand": " / ".join(winners),
+                "Lowest Commission (%)": min_val,
+                **{b: vals[b] for b in brands},
+            })
+
+    summary = pd.DataFrame(summary_rows)
+
+    # ── Sidebar filters ───────────────────────────────────────────────────
+    with st.sidebar:
+        st.header("🔍 Filters")
+        selected_bands = st.multiselect("Price Bands", price_bands, default=price_bands)
+        all_cats = sorted(summary["Category"].unique())
+        selected_cats = st.multiselect("Categories", all_cats, default=all_cats)
+        selected_brands = st.multiselect("Show brands", brands, default=brands)
+
+    filtered = summary[
+        summary["Price Band"].isin(selected_bands) &
+        summary["Category"].isin(selected_cats)
+    ]
+
+    # ── Win count cards ───────────────────────────────────────────────────
+    st.subheader("Which brand is cheapest most often?")
+    counts = {b: 0 for b in brands}
+    for _, row in filtered.iterrows():
+        for b in row["Cheapest Brand"].split(" / "):
+            if b.strip() in counts:
+                counts[b.strip()] += 1
+
+    cols = st.columns(4)
+    brand_colors = {"Aapno": "🟢", "Tayhaa": "🔵", "Aura": "🟠", "MYEH": "🟣"}
+    for col, (brand, cnt) in zip(cols, sorted(counts.items(), key=lambda x: -x[1])):
+        col.metric(f"{brand_colors.get(brand, '')} {brand}", f"{cnt} times cheapest")
+
+    st.markdown("---")
+
+    # ── Main table ────────────────────────────────────────────────────────
+    st.subheader("Commission Rates by Category & Price Band")
+
+    display_cols = ["Category", "Price Band", "Cheapest Brand", "Lowest Commission (%)"] + [b for b in brands if b in selected_brands]
+    display_df = filtered[display_cols].copy()
+
+    def highlight_cheapest(row):
+        styles = [""] * len(row)
+        cheapest = [b.strip() for b in str(row.get("Cheapest Brand", "")).split(" / ")]
+        for i, col in enumerate(row.index):
+            if col in brands:
+                val = row[col]
+                if val is None or (isinstance(val, float) and np.isnan(val)):
+                    styles[i] = "color: #aaa"
+                elif col in cheapest:
+                    styles[i] = "background-color: #C6EFCE; font-weight: bold"
+                else:
+                    styles[i] = "background-color: #FFC7CE"
+        return styles
+
+    st.dataframe(
+        display_df.style.apply(highlight_cheapest, axis=1).format(
+            {b: lambda x: f"{x:.0f}%" if x is not None and not np.isnan(x) else "N/A" for b in brands},
+            na_rep="N/A"
+        ),
+        use_container_width=True,
+        height=500,
+    )
+
+    # ── Pivot: cheapest brand per category across bands ───────────────────
+    st.markdown("---")
+    st.subheader("Cheapest Brand at a Glance")
+    pivot = filtered.pivot_table(
+        index="Category", columns="Price Band", values="Cheapest Brand", aggfunc="first"
+    ).reindex(columns=price_bands)
+    st.dataframe(pivot, use_container_width=True)
+
+    # ── Download ──────────────────────────────────────────────────────────
+    st.markdown("---")
+    import io
+    buf = io.BytesIO()
+    full_pivot = summary.pivot_table(
+        index="Category", columns="Price Band", values="Cheapest Brand", aggfunc="first"
+    ).reindex(columns=price_bands).reset_index()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        summary.to_excel(writer, sheet_name="Lowest Per Band", index=False)
+        full_pivot.to_excel(writer, sheet_name="Cheapest Brand Pivot", index=False)
+        pd.DataFrame([{"Brand": b, "Times Cheapest": counts[b]} for b in brands]).to_excel(writer, sheet_name="Brand Win Count", index=False)
+        data.to_excel(writer, sheet_name="Raw Rates", index=False)
+
+    # Apply colours to "Lowest Per Band" sheet
+    from openpyxl import load_workbook
+    from openpyxl.styles import PatternFill, Font, Alignment
+    from openpyxl.utils import get_column_letter
+
+    green  = PatternFill("solid", fgColor="C6EFCE")
+    yellow = PatternFill("solid", fgColor="FFEB9C")
+    red    = PatternFill("solid", fgColor="FFC7CE")
+    header_fill = PatternFill("solid", fgColor="4472C4")
+    header_font = Font(color="FFFFFF", bold=True)
+
+    wb = load_workbook(buf)
+    ws = wb["Lowest Per Band"]
+
+    # Style header row
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    # Find brand column indices (1-based) from header row
+    header = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    brand_col_indices = {b: header.index(b) + 1 for b in brands if b in header}
+    cheapest_col = header.index("Cheapest Brand") + 1 if "Cheapest Brand" in header else None
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        cheapest_brands = []
+        if cheapest_col:
+            val = ws.cell(row[0].row, cheapest_col).value
+            cheapest_brands = [b.strip() for b in str(val).split(" / ")] if val else []
+        for brand, col_i in brand_col_indices.items():
+            cell = ws.cell(row[0].row, col_i)
+            if cell.value is None or str(cell.value).strip() == "":
+                continue
+            if brand in cheapest_brands:
+                cell.fill = green if len(cheapest_brands) == 1 else yellow
+            else:
+                cell.fill = red
+
+    # Auto-width all sheets
+    for sheet_name in wb.sheetnames:
+        ws_cur = wb[sheet_name]
+        for col in ws_cur.columns:
+            max_len = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+            ws_cur.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 2, 30)
+
+    buf2 = io.BytesIO()
+    wb.save(buf2)
+    st.download_button("⬇️ Download Full Analysis", buf2.getvalue(), "commission_analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 def main():
     logger.info("Starting Multi-Portal Pricing Analyzer application")
-    
+
     st.set_page_config(
         page_title="Multi-Portal Pricing Analyzer",
         page_icon="📊",
         layout="wide"
     )
-    
+
     # Define pages
     myntra_page_obj = st.Page(myntra_page, title="Myntra Portal", icon="🛍️")
     ajio_page_obj = st.Page(ajio_page, title="Ajio Portal", icon="🏪")
     tatacliq_page_obj = st.Page(tatacliq_page, title="TataCliq Portal", icon="🛒")
     nykaa_page_obj = st.Page(nykaa_page, title="Nykaa Portal", icon="💄")
     pepperfry_page_obj = st.Page(pepperfry_page, title="Pepperfry Portal", icon="🪑")
-    
+    commission_page_obj = st.Page(commission_analysis_page, title="Commission Comparison", icon="📊")
+
     # Create navigation
-    pg = st.navigation([myntra_page_obj, ajio_page_obj, tatacliq_page_obj, nykaa_page_obj, pepperfry_page_obj])
-    
+    pg = st.navigation([myntra_page_obj, ajio_page_obj, tatacliq_page_obj, nykaa_page_obj, pepperfry_page_obj, commission_page_obj])
+
     # Run the selected page
     pg.run()
 
