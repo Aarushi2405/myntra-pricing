@@ -778,6 +778,103 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
         
         st.markdown("---")
 
+def display_detailed_calculations_for_article(df, portal, result_df, **kwargs):
+    """Display detailed calculations for a user-specified article number."""
+    profit_calc_func = get_profit_calculation_function(portal, kwargs.get('use_nine_ending', False))
+    price_endings = kwargs.get('price_endings', None)
+
+    article_no = st.text_input(
+        "Enter Article Number",
+        placeholder="e.g. 12345678",
+        help="Type the Article Number exactly as it appears in your data"
+    )
+
+    if not article_no:
+        st.info("Enter an Article Number above to see its detailed calculation breakdown.")
+        return
+
+    # Try to match as-is, then as integer if numeric
+    index_vals = df.index.astype(str)
+    match = article_no.strip() in index_vals
+
+    if not match:
+        st.error(f"Article Number **{article_no}** not found in the processed data.")
+        return
+
+    # Locate the row (use string-matched index)
+    row = df.loc[df.index.astype(str) == article_no.strip()].iloc[0]
+    row_label = row.name
+
+    best_discount = result_df.loc[result_df.index.astype(str) == article_no.strip(), 'Best Discount']
+    best_discount = best_discount.iloc[0] if len(best_discount) else None
+
+    st.markdown(f"### {row_label}")
+
+    if pd.isna(best_discount) or best_discount is None:
+        st.warning("No suitable discount found for this product.")
+        return
+
+    st.info(f"**Best Discount: {int(best_discount)}%**")
+
+    try:
+        if portal == 'Ajio':
+            result = profit_calc_func(int(best_discount), row, kwargs.get('all_cost_percent', 42), show_details=True)
+        elif portal == 'Myntra':
+            result = profit_calc_func(int(best_discount), row, show_details=True, price_endings=price_endings)
+        else:
+            result = profit_calc_func(int(best_discount), row, show_details=True)
+
+        if result and 'details' in result:
+            details = result['details']
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Input Variables:**")
+                for key, value in details.items():
+                    if key in ['mrp', 'cp', 'gst', 'discount', 'all_cost_percent']:
+                        if key == 'discount':
+                            st.write(f"• **{key.replace('_', ' ').title()}:** {value}%")
+                        else:
+                            st.write(f"• **{key.replace('_', ' ').title()}:** {value}")
+
+            with col2:
+                st.markdown("**Calculated Values:**")
+                for key, value in details.items():
+                    if key not in ['mrp', 'cp', 'gst', 'discount', 'all_cost_percent']:
+                        if isinstance(value, (int, float)):
+                            st.write(f"• **{key.replace('_', ' ').title()}:** ₹{value:.2f}")
+                        else:
+                            st.write(f"• **{key.replace('_', ' ').title()}:** {value}")
+
+            st.markdown("---")
+            if 'gross_settlement' in details:
+                col1, col2, col3, col4, col5 = st.columns(5)
+                with col1:
+                    st.metric("Best Discount", f"{int(best_discount)}%")
+                with col2:
+                    st.metric("Gross Settlement", f"₹{details['gross_settlement']:.2f}")
+                with col3:
+                    st.metric("Profit", f"₹{result['profit']:.2f}")
+                with col4:
+                    st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                with col5:
+                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+            else:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Best Discount", f"{int(best_discount)}%")
+                with col2:
+                    st.metric("Profit", f"₹{result['profit']:.2f}")
+                with col3:
+                    st.metric("Profit %", f"{result['profit_percent']:.2f}%")
+                with col4:
+                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+
+    except Exception as e:
+        logger.error(f"Error in article lookup calculation: {str(e)} | Article: {article_no} | Discount: {best_discount}")
+        st.error(f"Error calculating details: {str(e)}")
+
+
 def display_detailed_mrp_calculations(df, portal, result_df, **kwargs):
     """Display detailed calculations for the first 2 rows using their optimal MRP"""
     st.info("This section shows the detailed calculation breakdown for the first 2 products using their optimal MRP values.")
@@ -1495,14 +1592,22 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                         help=input_config.get('help', '')
                     )
                 elif input_config['type'] == 'multiselect':
+                    controlled_by = input_config.get('controlled_by')
+                    if controlled_by and extra_params.get(controlled_by):
+                        default_val = input_config.get('default_when_true', input_config.get('default', []))
+                    else:
+                        default_val = input_config.get('default', [])
                     selected = st.multiselect(
                         input_config['label'],
                         options=input_config.get('options', []),
-                        default=input_config.get('default', []),
+                        default=default_val,
                         help=input_config.get('help', '')
                     )
-                    extra_params[input_config['key']] = selected if selected else input_config.get('default', [])
-        
+                    extra_params[input_config['key']] = selected if selected else default_val
+
+        # Remove internal control keys not needed downstream
+        extra_params.pop('all_nine_endings', None)
+
         # Process button
         process_button = st.button("🚀 Process Data", type="primary")
     
@@ -1516,97 +1621,123 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         st.code("Logs are also saved to 'myntra_pricing.log' file in your project directory.", language="text")
     
     # Main content area
+    state_key = f"{portal_name}_results"
+
     if uploaded_file is not None:
         st.success(f"✅ File uploaded: {uploaded_file.name}")
-        
+
         if process_button:
             logger.info(f"User initiated processing for {portal_name} with target profit: {target_profit}%, min absolute profit: {min_absolute_profit}, mode: {calculation_mode}")
             with st.spinner(f"Processing your data for {portal_name}... This may take a few minutes."):
                 result_df, original_df, processed_df, abs_profit_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
-            
+
             if result_df is not None:
-                logger.info(f"Processing completed successfully for {portal_name}")
-                st.success("✅ Processing completed!")
-                
-                # Display results
-                mode_text = "MRP Calculation" if calculation_mode == 'mrp' else "Discount Analysis"
-                st.header(f"📈 Analysis Results - {portal_name} ({mode_text})")
-                
-                # Summary statistics
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    total_products = len(result_df)
-                    st.metric("Total Products", total_products)
-                
-                if calculation_mode == 'mrp':
-                    with col2:
-                        products_with_solution = len(result_df[result_df['Status'] == 'Found'])
-                        st.metric("Products with Solution", products_with_solution)
-                    
-                    with col3:
-                        success_rate = (products_with_solution / total_products * 100) if total_products > 0 else 0
-                        st.metric("Success Rate", f"{success_rate:.1f}%")
-                    
-                    with col4:
-                        avg_mrp = result_df[result_df['Optimal MRP'].notna()]['Optimal MRP'].mean() if len(result_df[result_df['Optimal MRP'].notna()]) > 0 else 0
-                        st.metric("Avg. Optimal MRP (₹)", f"₹{avg_mrp:.0f}")
-                else:
-                    with col2:
-                        products_with_target = len(result_df[result_df['Best Discount'].notna()])
-                        st.metric("Products Meeting Target", products_with_target)
-                    
-                    with col3:
-                        success_rate = (products_with_target / total_products * 100) if total_products > 0 else 0
-                        st.metric("Success Rate", f"{success_rate:.1f}%")
-                    
-                    with col4:
-                        avg_profit = result_df[result_df['Best Profit (₹)'] > 0]['Best Profit (₹)'].mean() if len(result_df[result_df['Best Profit (₹)'] > 0]) > 0 else 0
-                        st.metric("Avg. Profit (₹)", f"₹{avg_profit:.0f}")
-                
-                # Display the results table
-                st.subheader("📋 Detailed Results")
-                st.dataframe(result_df, use_container_width=True)
-                
-                # Detailed calculations in expandable block
-                if show_detailed_calc:
-                    st.markdown("---")
-                    if calculation_mode == 'discount':
-                        with st.expander("🔍 Detailed Calculations (First 2 Rows - Best Discount)", expanded=False):
-                            display_detailed_calculations(processed_df, portal_name, result_df, **extra_params)
-                    elif calculation_mode == 'mrp':
-                        with st.expander("🔍 Detailed Calculations (First 2 Rows - Optimal MRP)", expanded=False):
-                            # Add the required parameters for MRP detailed calculations
-                            mrp_kwargs = extra_params.copy()
-                            mrp_kwargs['target_profit_percent'] = target_profit
-                            mrp_kwargs['min_absolute_profit'] = min_absolute_profit
-                            display_detailed_mrp_calculations(processed_df, portal_name, result_df, **mrp_kwargs)
-                
-                # Download section
-                st.header("💾 Download Results")
-                
-                # Create Excel file in memory
-                current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-                
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    result_df.to_excel(writer, sheet_name=f'{portal_name} Analysis')
-                    if abs_profit_df is not None:
-                        abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
-                    if original_df is not None:
-                        original_df.to_excel(writer, sheet_name='Original Data', index=False)
-                
-                excel_data = output.getvalue()
-                
-                # Download button
-                st.download_button(
-                    label="📥 Download Excel Report",
-                    data=excel_data,
-                    file_name=f'{portal_name.lower()}_pricing_analysis_{current_time}.xlsx',
-                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                )
-                
-                st.info(f"💡 The Excel file contains analysis for {portal_name} with your results and original data.")
+                st.session_state[state_key] = {
+                    'result_df': result_df,
+                    'original_df': original_df,
+                    'processed_df': processed_df,
+                    'abs_profit_df': abs_profit_df,
+                    'calculation_mode': calculation_mode,
+                    'extra_params': extra_params,
+                    'target_profit': target_profit,
+                    'min_absolute_profit': min_absolute_profit,
+                }
+
+        if state_key in st.session_state:
+            saved = st.session_state[state_key]
+            result_df = saved['result_df']
+            original_df = saved['original_df']
+            processed_df = saved['processed_df']
+            abs_profit_df = saved['abs_profit_df']
+            saved_mode = saved['calculation_mode']
+            saved_extra_params = saved['extra_params']
+            saved_target_profit = saved['target_profit']
+            saved_min_absolute_profit = saved['min_absolute_profit']
+
+            logger.info(f"Processing completed successfully for {portal_name}")
+            st.success("✅ Processing completed!")
+
+            # Display results
+            mode_text = "MRP Calculation" if saved_mode == 'mrp' else "Discount Analysis"
+            st.header(f"📈 Analysis Results - {portal_name} ({mode_text})")
+
+            # Summary statistics
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                total_products = len(result_df)
+                st.metric("Total Products", total_products)
+
+            if saved_mode == 'mrp':
+                with col2:
+                    products_with_solution = len(result_df[result_df['Status'] == 'Found'])
+                    st.metric("Products with Solution", products_with_solution)
+
+                with col3:
+                    success_rate = (products_with_solution / total_products * 100) if total_products > 0 else 0
+                    st.metric("Success Rate", f"{success_rate:.1f}%")
+
+                with col4:
+                    avg_mrp = result_df[result_df['Optimal MRP'].notna()]['Optimal MRP'].mean() if len(result_df[result_df['Optimal MRP'].notna()]) > 0 else 0
+                    st.metric("Avg. Optimal MRP (₹)", f"₹{avg_mrp:.0f}")
+            else:
+                with col2:
+                    products_with_target = len(result_df[result_df['Best Discount'].notna()])
+                    st.metric("Products Meeting Target", products_with_target)
+
+                with col3:
+                    success_rate = (products_with_target / total_products * 100) if total_products > 0 else 0
+                    st.metric("Success Rate", f"{success_rate:.1f}%")
+
+                with col4:
+                    avg_profit = result_df[result_df['Best Profit (₹)'] > 0]['Best Profit (₹)'].mean() if len(result_df[result_df['Best Profit (₹)'] > 0]) > 0 else 0
+                    st.metric("Avg. Profit (₹)", f"₹{avg_profit:.0f}")
+
+            # Display the results table
+            st.subheader("📋 Detailed Results")
+            st.dataframe(result_df, use_container_width=True)
+
+            # Detailed calculations in expandable block
+            if show_detailed_calc:
+                st.markdown("---")
+                if saved_mode == 'discount':
+                    with st.expander("🔍 Detailed Calculations (First 2 Rows - Best Discount)", expanded=False):
+                        display_detailed_calculations(processed_df, portal_name, result_df, **saved_extra_params)
+                elif saved_mode == 'mrp':
+                    with st.expander("🔍 Detailed Calculations (First 2 Rows - Optimal MRP)", expanded=False):
+                        mrp_kwargs = saved_extra_params.copy()
+                        mrp_kwargs['target_profit_percent'] = saved_target_profit
+                        mrp_kwargs['min_absolute_profit'] = saved_min_absolute_profit
+                        display_detailed_mrp_calculations(processed_df, portal_name, result_df, **mrp_kwargs)
+
+                with st.expander("🔍 Detailed Calculations — Lookup by Article Number", expanded=False):
+                    display_detailed_calculations_for_article(processed_df, portal_name, result_df, **saved_extra_params)
+
+            # Download section
+            st.header("💾 Download Results")
+
+            # Create Excel file in memory
+            current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                result_df.to_excel(writer, sheet_name=f'{portal_name} Analysis')
+                if abs_profit_df is not None:
+                    abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
+                if original_df is not None:
+                    original_df.to_excel(writer, sheet_name='Original Data', index=False)
+
+            excel_data = output.getvalue()
+
+            # Download button
+            st.download_button(
+                label="📥 Download Excel Report",
+                data=excel_data,
+                file_name=f'{portal_name.lower()}_pricing_analysis_{current_time}.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+
+            st.info(f"💡 The Excel file contains analysis for {portal_name} with your results and original data.")
     
     else:
         st.info("👆 Please upload an Excel file to get started.")
@@ -1692,12 +1823,21 @@ def myntra_page():
 
     additional_inputs = [
         {
+            'key': 'all_nine_endings',
+            'type': 'checkbox',
+            'label': 'All 9-Endings (Rakhi Mode)',
+            'default': True,
+            'help': 'On: selects all 9-endings by default. Off: uses 29, 49, 79, 99 only.'
+        },
+        {
             'key': 'price_endings',
             'type': 'multiselect',
             'label': 'Price Ending Options',
-            'options': [29, 49, 79, 99],
+            'options': [9, 19, 29, 39, 49, 59, 69, 79, 89, 99],
             'default': [29, 49, 79, 99],
-            'help': 'Round selling prices to end with one of these values (e.g. 249, 299, 279, 299)'
+            'default_when_true': [9, 19, 29, 39, 49, 59, 69, 79, 89, 99],
+            'controlled_by': 'all_nine_endings',
+            'help': 'Round selling prices to end with one of these values (e.g. 249, 299)'
         }
     ]
 
