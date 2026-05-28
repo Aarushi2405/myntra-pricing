@@ -85,11 +85,13 @@ def round_selling_price_myntra(price, endings=None):
     lower = max(lower_candidates) if lower_candidates else None
     higher = min(higher_candidates) if higher_candidates else None
 
-    if higher is not None and (higher - price) <= 10:
+    if lower is None:
         return higher
-    elif lower is not None:
+    if higher is None:
         return lower
-    return higher
+    if (higher - price) <= (price - lower):
+        return higher
+    return lower
 
 def profit_percent_from_discount_myntra(discount, df, show_details=False, price_endings=None):
     """Calculate profit for Myntra portal"""
