@@ -1188,6 +1188,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         best_discount_with_rebate = None
         best_profit_with_rebate = 0
         best_selling_price = None
+        best_gross_settlement = None
         prev_profit = None
         weird_jumps = []
 
@@ -1244,7 +1245,9 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
                 else:
                     detail_result = profit_calc_func(best_discount, row, show_details=True)
                 if isinstance(detail_result, dict):
-                    best_selling_price = detail_result['details'].get('selling_price')
+                    details = detail_result['details']
+                    best_selling_price = details.get('selling_price')
+                    best_gross_settlement = details.get('gross_settlement')
             except Exception as e:
                 logger.warning(f"Error fetching selling price for best discount in row {idx}: {str(e)}")
 
@@ -1263,12 +1266,14 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
 
         row_profit['Best Discount'] = best_discount
         row_profit['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
+        row_profit['Gross Settlement'] = round(best_gross_settlement, 2) if best_gross_settlement is not None else None
         row_profit['Best Profit (₹)'] = best_profit
         row_profit['Weird Profit Jump'] = ','.join(str(x) for x in weird_jumps)
         profit_data.append(row_profit)
 
         row_profit_abs['Best Discount'] = best_discount
         row_profit_abs['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
+        row_profit_abs['Gross Settlement'] = round(best_gross_settlement, 2) if best_gross_settlement is not None else None
         row_profit_abs['Best Profit (₹)'] = best_profit
         profit_data_abs.append(row_profit_abs)
 
@@ -1283,7 +1288,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     
     def _reorder(df_in):
         cols = df_in.columns.tolist()
-        for c in ['Best Profit (₹)', 'Best Selling Price', 'Best Discount']:
+        for c in ['Best Profit (₹)', 'Gross Settlement', 'Best Selling Price', 'Best Discount']:
             if c in cols:
                 cols.insert(0, cols.pop(cols.index(c)))
         for mbb_col in ['Profit % at REBATE TD', 'Profit at REBATE TD', 'REBATE TD Discount']:
@@ -1430,6 +1435,11 @@ def build_mrp_table(df, discount, target_profit_percent, min_absolute_profit, po
                 row_mrp['Profit'] = round(profit, 2)
                 row_mrp['Profit %'] = round(profit_pct, 2)
                 row_mrp['Selling Price'] = round_selling_price_myntra(optimal_mrp - (optimal_mrp * discount / 100), endings=kwargs.get('price_endings', None)) if optimal_mrp else None
+                row_mrp['Gross Settlement'] = None
+                if row_mrp['Selling Price'] is not None:
+                    detail_result = profit_percent_from_selling_price_myntra(row_mrp['Selling Price'], row, show_details=True)
+                    if isinstance(detail_result, dict):
+                        row_mrp['Gross Settlement'] = round(detail_result['details'].get('gross_settlement', 0), 2)
                 row_mrp['Status'] = 'Found' if optimal_mrp else 'No Solution'
                 
             else:
@@ -1438,6 +1448,7 @@ def build_mrp_table(df, discount, target_profit_percent, min_absolute_profit, po
                 row_mrp['Profit'] = 0
                 row_mrp['Profit %'] = 0
                 row_mrp['Selling Price'] = None
+                row_mrp['Gross Settlement'] = None
                 row_mrp['Status'] = 'Not Supported'
                 
         except Exception as e:
@@ -1446,6 +1457,7 @@ def build_mrp_table(df, discount, target_profit_percent, min_absolute_profit, po
             row_mrp['Profit'] = 0
             row_mrp['Profit %'] = 0
             row_mrp['Selling Price'] = None
+            row_mrp['Gross Settlement'] = None
             row_mrp['Status'] = 'Error'
         
         mrp_data.append(row_mrp)
@@ -1489,6 +1501,7 @@ def build_selling_price_table(df, target_profit_percent, min_absolute_profit, po
             if portal != 'Myntra':
                 row_sp['Minimum Selling Price'] = None
                 row_sp['Equivalent Discount'] = None
+                row_sp['Gross Settlement'] = None
                 row_sp['Profit'] = 0
                 row_sp['Profit %'] = 0
                 row_sp['Status'] = 'Not Supported'
@@ -1499,6 +1512,7 @@ def build_selling_price_table(df, target_profit_percent, min_absolute_profit, po
             if pd.isna(mrp) or mrp <= 0:
                 row_sp['Minimum Selling Price'] = None
                 row_sp['Equivalent Discount'] = None
+                row_sp['Gross Settlement'] = None
                 row_sp['Profit'] = 0
                 row_sp['Profit %'] = 0
                 row_sp['Status'] = 'Invalid MRP'
@@ -1508,6 +1522,7 @@ def build_selling_price_table(df, target_profit_percent, min_absolute_profit, po
             minimum_sp = None
             best_profit = 0
             best_profit_pct = 0
+            best_gross_settlement = None
             equivalent_discount = None
 
             candidate_prices = sorted(
@@ -1525,10 +1540,14 @@ def build_selling_price_table(df, target_profit_percent, min_absolute_profit, po
                     best_profit = profit
                     best_profit_pct = profit_pct
                     equivalent_discount = ((mrp - selling_price) / mrp) * 100
+                    detail_result = profit_percent_from_selling_price_myntra(selling_price, row, show_details=True)
+                    if isinstance(detail_result, dict):
+                        best_gross_settlement = detail_result['details'].get('gross_settlement')
                     break
 
             row_sp['Minimum Selling Price'] = minimum_sp
             row_sp['Equivalent Discount'] = round(equivalent_discount, 2) if equivalent_discount is not None else None
+            row_sp['Gross Settlement'] = round(best_gross_settlement, 2) if best_gross_settlement is not None else None
             row_sp['Profit'] = round(best_profit, 2)
             row_sp['Profit %'] = round(best_profit_pct, 2)
             row_sp['Status'] = 'Found' if minimum_sp is not None else 'No Solution'
@@ -1537,6 +1556,7 @@ def build_selling_price_table(df, target_profit_percent, min_absolute_profit, po
             logger.warning(f"Error calculating selling price for row {idx}: {str(e)} | Row data: {dict(row)}")
             row_sp['Minimum Selling Price'] = None
             row_sp['Equivalent Discount'] = None
+            row_sp['Gross Settlement'] = None
             row_sp['Profit'] = 0
             row_sp['Profit %'] = 0
             row_sp['Status'] = 'Error'
