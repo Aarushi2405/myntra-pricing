@@ -1808,7 +1808,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         logging.getLogger().setLevel(getattr(logging, log_level))
         
         # Calculation mode selection (only for Myntra)
-        calculation_mode = 'selling_price'  # Default mode
+        calculation_mode = 'discount'  # Default mode for portals without an explicit mode selector
         if calculation_modes and portal_name == 'Myntra':
             default_mode_index = next(
                 (idx for idx, mode in enumerate(calculation_modes) if "Selling Price" in mode),
@@ -2071,6 +2071,8 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                        'SHIPPING', 'COMMISSION %', 'FIXED FEE', 'REBATE TD', 'REBATE SP', 'REBATE VALUE'],
             'Ajio': ['EAN', 'CP', 'Listing MRP', 'GST'],
             'TataCliq': ['SKU Code', 'CP', 'MRP', 'GST RATE'],
+            'Nykaa': ['SKU Code', 'MRP', 'cp', 'gst', 'shipping'],
+            'Pepperfry': ['van', 'cp', 'mrp', 'gst'],
         }
         cols = template_columns.get(portal_name)
         if cols:
@@ -2173,8 +2175,12 @@ def ajio_page():
     calculation_info = """
     **Ajio Calculation:**
     - Selling price = Listing MRP - (Listing MRP × discount%)
-    - All cost amount = Selling price × All cost percentage
-    - Profit = Selling price - All cost amount - CP
+    - GST value = Selling price × GST / 100
+    - Commission = 35% of selling price
+    - Commission GST = 18% of commission
+    - Marketing = 10% of selling price
+    - Total cost = Marketing + Total commission + GST value + CP
+    - Profit = Selling price - Total cost
     - Profit percentage = Profit / Selling price × 100
     """
     
@@ -2183,13 +2189,14 @@ def ajio_page():
     - **EAN**: Product EAN code
     - **CP**: Cost price (must be numeric)
     - **Listing MRP**: Maximum Retail Price (must be numeric)
+    - **GST**: GST percentage (must be numeric)
     
     **Important Data Format Notes:**
-    - Numeric columns (CP, Listing MRP) should be formatted as **Number** in Excel, not Text
+    - Numeric columns (CP, Listing MRP, GST) should be formatted as **Number** in Excel, not Text
     - Identifier columns (EAN) should remain as **Text** format
     - If numeric columns are formatted as Text, the system will automatically convert them
     - Empty or invalid numeric values will be treated as 0
-    - Ajio calculation uses configurable all-cost percentage for profit calculation
+    - Ajio calculation uses fixed commission and marketing percentages in the current formula
     """
     
     # Additional inputs specific to Ajio
@@ -2292,10 +2299,10 @@ def pepperfry_page():
     """Pepperfry pricing analyzer page"""
     calculation_info = """
     **Pepperfry Calculation:**
-    - Selling price = Listing MRP - (Listing MRP × discount%)
+    - Selling price = MRP - (MRP × discount%)
     - GST value = GST × selling price / 100
     - Commission = 35% of selling price
-    - Commission GST = 18% of commission
+    - Commission GST = 0% of commission
     - Total commission = Commission + Commission GST
     - Marketing = 10% of selling price
     - Total cost = Marketing + Total commission + GST value + CP
@@ -2305,17 +2312,17 @@ def pepperfry_page():
     
     data_format_info = """
     **Required columns for Pepperfry:**
-    - **EAN**: Product EAN code
-    - **CP**: Cost price (must be numeric)
-    - **Listing MRP**: Maximum Retail Price (must be numeric)
-    - **GST**: GST percentage (must be numeric)
+    - **van**: Product identifier
+    - **cp**: Cost price (must be numeric)
+    - **mrp**: Maximum Retail Price (must be numeric)
+    - **gst**: GST percentage (must be numeric)
     
     **Important Data Format Notes:**
-    - Numeric columns (CP, Listing MRP, GST) should be formatted as **Number** in Excel, not Text
-    - Identifier columns (EAN) should remain as **Text** format
+    - Numeric columns (cp, mrp, gst) should be formatted as **Number** in Excel, not Text
+    - Identifier columns (van) should remain as **Text** format
     - If numeric columns are formatted as Text, the system will automatically convert them
     - Empty or invalid numeric values will be treated as 0
-    - Pepperfry calculation uses the same structure as Ajio with 35% commission and 10% marketing
+    - Pepperfry calculation uses 35% commission and 10% marketing
     """
     
     # Additional inputs specific to Pepperfry (same as Ajio)
