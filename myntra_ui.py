@@ -6,6 +6,7 @@ import io
 import re
 import logging
 import sys
+from decimal import Decimal, ROUND_HALF_UP
 
 # Configure logging
 def setup_logging():
@@ -395,18 +396,36 @@ def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42, show_de
     try:
         # Safely extract and convert values, handling text-formatted numbers
         mrp = safe_convert_to_numeric(df['Listing MRP'], 'Listing MRP', 0)
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid Listing MRP value: {df['Listing MRP']} (converted to {mrp})")
+            return 0, 0
+
+        selling_price = mrp - (mrp * discount / 100)
+        return profit_percent_from_selling_price_ajio(selling_price, df, all_cost_percent, show_details)
+
+    except Exception as e:
+        logger.error(f"Error in Ajio profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('Listing MRP', 'N/A')} | CP: {df.get('CP', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return 0, 0
+
+def profit_percent_from_selling_price_ajio(selling_price, df, all_cost_percent=42, show_details=False):
+    """Calculate Ajio profit for an explicit selling price."""
+    try:
+        mrp = safe_convert_to_numeric(df['Listing MRP'], 'Listing MRP', 0)
         cp = safe_convert_to_numeric(df['CP'], 'CP', 0)
         gst = safe_convert_to_numeric(df['GST'], 'GST', 0)
 
-        # Validate essential values
         if pd.isna(mrp) or mrp <= 0:
             logger.warning(f"Invalid Listing MRP value: {df['Listing MRP']} (converted to {mrp})")
             return 0, 0
         if pd.isna(cp) or cp <= 0:
             logger.warning(f"Invalid CP value: {df['CP']} (converted to {cp})")
             return 0, 0
+        if pd.isna(selling_price) or selling_price <= 0:
+            return 0, 0
 
-        selling_price = mrp - (mrp * discount / 100)
+        discount = ((mrp - selling_price) / mrp) * 100 if mrp > 0 else 0
         gst_value = selling_price * gst / 100
         comission = selling_price * 0.35
         comission_gst = comission * 0.18
@@ -442,7 +461,7 @@ def profit_percent_from_discount_ajio(discount, df, all_cost_percent=42, show_de
         return profit, profit_percent
 
     except Exception as e:
-        logger.error(f"Error in Ajio profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('Listing MRP', 'N/A')} | CP: {df.get('CP', 'N/A')}")
+        logger.error(f"Error in Ajio selling price calculation: {str(e)} | Selling Price: {selling_price} | MRP: {df.get('Listing MRP', 'N/A')} | CP: {df.get('CP', 'N/A')}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
@@ -461,8 +480,8 @@ def round_price_to_end_with_nine(price):
     if price <= 0:
         return price
     
-    # Round to nearest 10, then subtract 1 to get ending with 9
-    rounded_to_ten = round(price / 10) * 10
+    # Match Excel ROUND(price, -1) behavior, then subtract 1 to end with 9.
+    rounded_to_ten = float((Decimal(str(price)) / Decimal('10')).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * Decimal('10'))
     price_ending_nine = rounded_to_ten - 1
     
     # Handle edge case where rounding would make price too low
@@ -491,6 +510,8 @@ def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details
         discount = ((mrp - selling_price) / mrp) * 100 if mrp > 0 else 0
 
         gst_value = gst_rate * selling_price / 100
+        processing_fee = safe_convert_to_numeric(df.get('Processing fee', 49), 'Processing fee', 49)
+        processing_fee_gst = processing_fee * 0.18
 
         if selling_price < 500:
             shipping_charge = 0
@@ -503,7 +524,7 @@ def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details
         total_fees = commission + igst 
         
         marketting_fees = 0.05 * selling_price
-        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees
+        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees + processing_fee + processing_fee_gst
 
         profit = selling_price - total_cost
         profit_percent = profit / selling_price * 100 if selling_price > 0 else 0
@@ -523,6 +544,8 @@ def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details
                     'total_fees': total_fees,
                     'shipping_charge': shipping_charge,
                     'marketting_fees': marketting_fees,
+                    'processing_fee': processing_fee,
+                    'processing_fee_gst': processing_fee_gst,
                     'cp': cp,
                     'total_cost': total_cost,
                     'profit': profit,
@@ -584,9 +607,11 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
             logger.warning(f"Invalid CP value: {df['CP']} (converted to {cp})")
             return 0, 0
 
-        selling_price = mrp - (mrp * discount / 100)
+        selling_price = round_price_to_end_with_nine(mrp - (mrp * discount / 100))
 
         gst_value = gst_rate * selling_price / 100
+        processing_fee = safe_convert_to_numeric(df.get('Processing fee', 49), 'Processing fee', 49)
+        processing_fee_gst = processing_fee * 0.18
 
         if selling_price < 500:
             shipping_charge = 0
@@ -599,7 +624,7 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
         total_fees = commission + igst 
         
         marketting_fees = 0.05 * selling_price
-        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees
+        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees + processing_fee + processing_fee_gst
 
         profit = selling_price - total_cost
         profit_percent = profit / selling_price * 100
@@ -619,6 +644,8 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
                     'total_fees': total_fees,
                     'shipping_charge': shipping_charge,
                     'marketting_fees': marketting_fees,
+                    'processing_fee': processing_fee,
+                    'processing_fee_gst': processing_fee_gst,
                     'cp': cp,
                     'total_cost': total_cost,
                     'profit': profit,
@@ -639,19 +666,37 @@ def profit_percent_from_discount_nykaa(discount, df, show_details=False):
     try:
         # Safely extract and convert values, handling text-formatted numbers
         mrp = safe_convert_to_numeric(df['MRP'], 'MRP', 0)
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid MRP value: {df['MRP']} (converted to {mrp})")
+            return 0, 0
+
+        selling_price = mrp - (mrp * discount / 100)
+        return profit_percent_from_selling_price_nykaa(selling_price, df, show_details)
+
+    except Exception as e:
+        logger.error(f"Error in Nykaa profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return 0, 0
+
+def profit_percent_from_selling_price_nykaa(selling_price, df, show_details=False):
+    """Calculate Nykaa profit for an explicit selling price."""
+    try:
+        mrp = safe_convert_to_numeric(df['MRP'], 'MRP', 0)
         cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
         gst_rate = safe_convert_to_numeric(df['gst'], 'gst', 0)
         shipping = safe_convert_to_numeric(df['shipping'], 'shipping', 0)
 
-        # Validate essential values
         if pd.isna(mrp) or mrp <= 0:
             logger.warning(f"Invalid MRP value: {df['MRP']} (converted to {mrp})")
             return 0, 0
         if pd.isna(cp) or cp <= 0:
             logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
             return 0, 0
+        if pd.isna(selling_price) or selling_price <= 0:
+            return 0, 0
 
-        selling_price = mrp - (mrp * discount / 100)
+        discount = ((mrp - selling_price) / mrp) * 100 if mrp > 0 else 0
         gst_value = gst_rate * selling_price / 100
         
         commission = 0.28 * selling_price
@@ -659,7 +704,9 @@ def profit_percent_from_discount_nykaa(discount, df, show_details=False):
         total_commission = commission + commission_tax
         
         marketing_fees = 0.1 * selling_price
-        total_cost = cp + gst_value + shipping + marketing_fees + total_commission
+        payment_fee = selling_price * 0.008
+        payment_fee_gst = payment_fee * 0.18
+        total_cost = cp + gst_value + shipping + marketing_fees + total_commission + payment_fee + payment_fee_gst
 
         profit = selling_price - total_cost
         profit_percent = profit / selling_price * 100
@@ -679,6 +726,8 @@ def profit_percent_from_discount_nykaa(discount, df, show_details=False):
                     'total_commission': total_commission,
                     'shipping': shipping,
                     'marketing_fees': marketing_fees,
+                    'payment_fee': payment_fee,
+                    'payment_fee_gst': payment_fee_gst,
                     'cp': cp,
                     'total_cost': total_cost,
                     'profit': profit,
@@ -689,7 +738,7 @@ def profit_percent_from_discount_nykaa(discount, df, show_details=False):
         return profit, profit_percent
 
     except Exception as e:
-        logger.error(f"Error in Nykaa profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        logger.error(f"Error in Nykaa selling price calculation: {str(e)} | Selling Price: {selling_price} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('cp', 'N/A')}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
@@ -699,18 +748,36 @@ def profit_percent_from_discount_pepperfry(discount, df, all_cost_percent=42, sh
     try:
         # Safely extract and convert values, handling text-formatted numbers
         mrp = safe_convert_to_numeric(df['mrp'], 'mrp', 0)
+        if pd.isna(mrp) or mrp <= 0:
+            logger.warning(f"Invalid Listing MRP value: {df['mrp']} (converted to {mrp})")
+            return 0, 0
+
+        selling_price = mrp - (mrp * discount / 100)
+        return profit_percent_from_selling_price_pepperfry(selling_price, df, all_cost_percent, show_details)
+
+    except Exception as e:
+        logger.error(f"Error in Pepperfry profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('mrp', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return 0, 0
+
+def profit_percent_from_selling_price_pepperfry(selling_price, df, all_cost_percent=42, show_details=False):
+    """Calculate Pepperfry profit for an explicit selling price."""
+    try:
+        mrp = safe_convert_to_numeric(df['mrp'], 'mrp', 0)
         cp = safe_convert_to_numeric(df['cp'], 'cp', 0)
         gst = safe_convert_to_numeric(df['gst'], 'gst', 0)
 
-        # Validate essential values
         if pd.isna(mrp) or mrp <= 0:
             logger.warning(f"Invalid Listing MRP value: {df['mrp']} (converted to {mrp})")
             return 0, 0
         if pd.isna(cp) or cp <= 0:
             logger.warning(f"Invalid CP value: {df['cp']} (converted to {cp})")
             return 0, 0
+        if pd.isna(selling_price) or selling_price <= 0:
+            return 0, 0
 
-        selling_price = mrp - (mrp * discount / 100)
+        discount = ((mrp - selling_price) / mrp) * 100 if mrp > 0 else 0
         gst_value = selling_price * gst / 100
         comission = selling_price * 0.35
         comission_gst = comission * 0
@@ -746,7 +813,7 @@ def profit_percent_from_discount_pepperfry(discount, df, all_cost_percent=42, sh
         return profit, profit_percent
 
     except Exception as e:
-        logger.error(f"Error in Pepperfry profit calculation: {str(e)} | Discount: {discount} | MRP: {df.get('mrp', 'N/A')} | CP: {df.get('cp', 'N/A')}")
+        logger.error(f"Error in Pepperfry selling price calculation: {str(e)} | Selling Price: {selling_price} | MRP: {df.get('mrp', 'N/A')} | CP: {df.get('cp', 'N/A')}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
@@ -765,23 +832,55 @@ def get_profit_calculation_function(portal, use_nine_ending=False):
     }
     return portal_functions.get(portal, profit_percent_from_discount_myntra)
 
+def get_portal_mrp(row, portal):
+    """Return the MRP/listing price column used to generate candidate selling prices."""
+    mrp_columns = {
+        'Myntra': 'MRP',
+        'Ajio': 'Listing MRP',
+        'TataCliq': 'MRP',
+        'Nykaa': 'MRP',
+        'Pepperfry': 'mrp',
+    }
+    column = mrp_columns.get(portal, 'MRP')
+    return safe_convert_to_numeric(row.get(column, 0), column, 0)
+
+def generate_nine_ending_prices(mrp):
+    """Generate selling prices ending in 9, from low to high, up to MRP."""
+    if pd.isna(mrp) or mrp <= 0:
+        return []
+    return list(range(9, int(mrp) + 1, 10))
+
+def calculate_profit_from_selling_price(portal, selling_price, row, show_details=False, **kwargs):
+    """Calculate portal profit from an explicit selling price."""
+    if portal == 'Myntra':
+        return profit_percent_from_selling_price_myntra(selling_price, row, show_details=show_details)
+    if portal == 'Ajio':
+        return profit_percent_from_selling_price_ajio(selling_price, row, kwargs.get('all_cost_percent', 42), show_details=show_details)
+    if portal == 'TataCliq':
+        return calculate_tatacliq_profit_from_selling_price(selling_price, row, show_details=show_details)
+    if portal == 'Nykaa':
+        return profit_percent_from_selling_price_nykaa(selling_price, row, show_details=show_details)
+    if portal == 'Pepperfry':
+        return profit_percent_from_selling_price_pepperfry(selling_price, row, kwargs.get('all_cost_percent', 42), show_details=show_details)
+    return profit_percent_from_selling_price_myntra(selling_price, row, show_details=show_details)
+
 def display_detailed_calculations(df, portal, result_df, **kwargs):
-    """Display detailed calculations for the first 2 rows using their best discount"""
-    profit_calc_func = get_profit_calculation_function(portal, kwargs.get('use_nine_ending', False))
+    """Display detailed calculations for the first 2 rows using their best 9-ending selling price."""
     
-    st.info("This section shows the detailed calculation breakdown for the first 2 products using their optimal discount rates.")
+    st.info("This section shows the detailed calculation breakdown for the first 2 products using their optimal 9-ending selling prices.")
     
     for row_idx in range(min(2, len(df))):
         row = df.iloc[row_idx]
         row_index = df.index[row_idx]
         
-        # Get the best discount from the result dataframe
+        # Get the best selling price and its equivalent discount from the result dataframe
         if row_idx < len(result_df):
             best_discount = result_df.iloc[row_idx]['Best Discount']
+            best_selling_price = result_df.iloc[row_idx].get('Best Selling Price')
             
-            if pd.isna(best_discount) or best_discount is None:
+            if pd.isna(best_selling_price) or best_selling_price is None:
                 st.markdown(f"### Row {row_idx + 1} - {row_index}")
-                st.warning("No suitable discount found for this product")
+                st.warning("No suitable selling price found for this product")
                 st.markdown("---")
                 continue
         else:
@@ -791,13 +890,10 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
             continue
         
         st.markdown(f"### Row {row_idx + 1} - {row_index}")
-        st.info(f"**Best Discount: {best_discount}%**")
+        st.info(f"**Best Selling Price: ₹{best_selling_price:.0f}** | **Equivalent Discount: {best_discount:.2f}%**")
         
         try:
-            if portal == 'Ajio':
-                result = profit_calc_func(int(best_discount), row, kwargs.get('all_cost_percent', 42), show_details=True)
-            else:
-                result = profit_calc_func(int(best_discount), row, show_details=True)
+            result = calculate_profit_from_selling_price(portal, best_selling_price, row, show_details=True, **kwargs)
             
             if result and 'details' in result:
                 details = result['details']
@@ -828,7 +924,7 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
                 if 'gross_settlement' in details:
                     col1, col2, col3, col4, col5 = st.columns(5)
                     with col1:
-                        st.metric("Best Discount", f"{best_discount}%")
+                        st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
                     with col2:
                         st.metric("Gross Settlement", f"₹{details['gross_settlement']:.2f}")
                     with col3:
@@ -836,30 +932,28 @@ def display_detailed_calculations(df, portal, result_df, **kwargs):
                     with col4:
                         st.metric("Profit %", f"{result['profit_percent']:.2f}%")
                     with col5:
-                        st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+                        st.metric("Eq. Discount", f"{details['discount']:.2f}%")
                 else:
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Best Discount", f"{best_discount}%")
+                        st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
                     with col2:
                         st.metric("Profit", f"₹{result['profit']:.2f}")
                     with col3:
                         st.metric("Profit %", f"{result['profit_percent']:.2f}%")
                     with col4:
-                        st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
-            
+                        st.metric("Eq. Discount", f"{details['discount']:.2f}%")
+
         except Exception as e:
-            logger.error(f"Error in detailed calculation for row {row_idx}: {str(e)} | Discount: {best_discount}% | Portal: {portal}")
+            logger.error(f"Error in detailed calculation for row {row_idx}: {str(e)} | Selling Price: {best_selling_price} | Portal: {portal}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
-            st.error(f"Error calculating for {best_discount}% discount: {str(e)}")
+            st.error(f"Error calculating for ₹{best_selling_price:.0f} selling price: {str(e)}")
         
         st.markdown("---")
 
 def display_detailed_calculations_for_article(df, portal, result_df, **kwargs):
     """Display detailed calculations for a user-specified article number."""
-    profit_calc_func = get_profit_calculation_function(portal, kwargs.get('use_nine_ending', False))
-    price_endings = kwargs.get('price_endings', None)
     calculation_mode = kwargs.get('calculation_mode', 'discount')
 
     article_no = st.text_input(
@@ -907,20 +1001,17 @@ def display_detailed_calculations_for_article(df, portal, result_df, **kwargs):
 
     best_discount = result_df.loc[result_df.index.astype(str) == article_no.strip(), 'Best Discount']
     best_discount = best_discount.iloc[0] if len(best_discount) else None
+    best_selling_price = result_df.loc[result_df.index.astype(str) == article_no.strip(), 'Best Selling Price']
+    best_selling_price = best_selling_price.iloc[0] if len(best_selling_price) else None
 
-    if pd.isna(best_discount) or best_discount is None:
-        st.warning("No suitable discount found for this product.")
+    if pd.isna(best_selling_price) or best_selling_price is None:
+        st.warning("No suitable selling price found for this product.")
         return
 
-    st.info(f"**Best Discount: {int(best_discount)}%**")
+    st.info(f"**Best Selling Price: ₹{best_selling_price:.0f}** | **Equivalent Discount: {best_discount:.2f}%**")
 
     try:
-        if portal == 'Ajio':
-            result = profit_calc_func(int(best_discount), row, kwargs.get('all_cost_percent', 42), show_details=True)
-        elif portal == 'Myntra':
-            result = profit_calc_func(int(best_discount), row, show_details=True, price_endings=price_endings)
-        else:
-            result = profit_calc_func(int(best_discount), row, show_details=True)
+        result = calculate_profit_from_selling_price(portal, best_selling_price, row, show_details=True, **kwargs)
 
         if result and 'details' in result:
             details = result['details']
@@ -948,7 +1039,7 @@ def display_detailed_calculations_for_article(df, portal, result_df, **kwargs):
             if 'gross_settlement' in details:
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
-                    st.metric("Best Discount", f"{int(best_discount)}%")
+                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
                 with col2:
                     st.metric("Gross Settlement", f"₹{details['gross_settlement']:.2f}")
                 with col3:
@@ -956,20 +1047,20 @@ def display_detailed_calculations_for_article(df, portal, result_df, **kwargs):
                 with col4:
                     st.metric("Profit %", f"{result['profit_percent']:.2f}%")
                 with col5:
-                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+                    st.metric("Eq. Discount", f"{details['discount']:.2f}%")
             else:
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Best Discount", f"{int(best_discount)}%")
+                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
                 with col2:
                     st.metric("Profit", f"₹{result['profit']:.2f}")
                 with col3:
                     st.metric("Profit %", f"{result['profit_percent']:.2f}%")
                 with col4:
-                    st.metric("Selling Price", f"₹{details['selling_price']:.2f}")
+                    st.metric("Eq. Discount", f"{details['discount']:.2f}%")
 
     except Exception as e:
-        logger.error(f"Error in article lookup calculation: {str(e)} | Article: {article_no} | Discount: {best_discount}")
+        logger.error(f"Error in article lookup calculation: {str(e)} | Article: {article_no} | Selling Price: {best_selling_price}")
         st.error(f"Error calculating details: {str(e)}")
 
 def display_calculation_details(result, primary_value, primary_label):
@@ -1167,13 +1258,6 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     status_text = st.empty()
     
     total_rows = len(df)
-    use_nine_ending = kwargs.get('use_nine_ending', False)
-    
-    # Use optimized nine-ending calculation if enabled for TataCliq
-    if portal == 'TataCliq' and use_nine_ending:
-        return build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profit, portal, **kwargs)
-    
-    profit_calc_func = get_profit_calculation_function(portal, use_nine_ending)
     
     for idx, (index, row) in enumerate(df.iterrows()):
         # Update progress every 10 rows to reduce logging overhead
@@ -1183,10 +1267,9 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         
         row_profit = {}
         row_profit_abs = {}
-        best_discount_no_rebate = None
-        best_profit_no_rebate = 0
-        best_discount_with_rebate = None
-        best_profit_with_rebate = 0
+        best_discount = None
+        best_profit = 0
+        best_profit_percent = 0
         best_selling_price = None
         best_gross_settlement = None
         prev_profit = None
@@ -1195,66 +1278,49 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         mbb_td_row = safe_convert_to_numeric(row.get('REBATE TD', 0), 'REBATE TD', 0) if portal == 'Myntra' else 0
         mbb_rsp_row = safe_convert_to_numeric(row.get('REBATE SP', 0), 'REBATE SP', 0) if portal == 'Myntra' else 0
 
-        price_endings = kwargs.get('price_endings', None)
-        for discount in range(1, 100):
+        mrp_row = get_portal_mrp(row, portal)
+        selling_prices = generate_nine_ending_prices(mrp_row)
+
+        for selling_price in selling_prices:
             try:
-                if portal == 'Ajio':
-                    profit, profit_pct = profit_calc_func(discount, row, kwargs.get('all_cost_percent', 42))
-                elif portal == 'Myntra':
-                    profit, profit_pct = profit_calc_func(discount, row, price_endings=price_endings)
+                result = calculate_profit_from_selling_price(portal, selling_price, row, show_details=True, **kwargs)
+                if isinstance(result, dict):
+                    profit = result['profit']
+                    profit_pct = result['profit_percent']
+                    details = result['details']
+                    discount = details.get('discount', ((mrp_row - selling_price) / mrp_row * 100) if mrp_row > 0 else 0)
+                    gross_settlement = details.get('gross_settlement')
                 else:
-                    profit, profit_pct = profit_calc_func(discount, row)
-                row_profit[f'{discount}%'] = round(profit_pct, 2)
-                row_profit_abs[f'{discount}%'] = round(profit, 2)
+                    profit, profit_pct = result
+                    discount = ((mrp_row - selling_price) / mrp_row * 100) if mrp_row > 0 else 0
+                    gross_settlement = None
+
+                price_key = f'₹{int(selling_price)}'
+                row_profit[price_key] = round(profit_pct, 2)
+                row_profit_abs[price_key] = round(profit, 2)
 
                 if profit_pct >= target_profit_percent and profit > min_absolute_profit:
-                    mrp_row = safe_convert_to_numeric(row.get('MRP', 0), 'MRP', 0)
-                    sp = round_selling_price_myntra(mrp_row - (mrp_row * discount / 100), endings=price_endings) if mrp_row > 0 else 0
-                    rebate_active = (mbb_rsp_row > 0 and sp < mbb_rsp_row) or (mbb_td_row > 0 and discount >= mbb_td_row)
-                    if rebate_active:
-                        best_discount_with_rebate = discount
-                        best_profit_with_rebate = profit
-                    else:
-                        best_discount_no_rebate = discount
-                        best_profit_no_rebate = profit
+                    if best_selling_price is None or selling_price < best_selling_price:
+                        best_discount = discount
+                        best_profit = profit
+                        best_profit_percent = profit_pct
+                        best_selling_price = selling_price
+                        best_gross_settlement = gross_settlement
 
                 if prev_profit is not None and profit_pct > 15 and profit_pct > prev_profit + 0.01 and discount != mbb_td_row:
-                    weird_jumps.append(discount)
+                    weird_jumps.append(selling_price)
                 prev_profit = profit_pct
 
             except Exception as e:
-                logger.warning(f"Error calculating profit for discount {discount}% in row {idx}: {str(e)} | Row data: {dict(row)}")
-                row_profit[f'{discount}%'] = None
-                row_profit_abs[f'{discount}%'] = None
-
-        # Pick the zone (with or without rebate) that gives better profit.
-        # Within each zone the highest qualifying discount is already tracked.
-        if best_discount_with_rebate is not None and best_profit_with_rebate >= best_profit_no_rebate:
-            best_discount = best_discount_with_rebate
-            best_profit = best_profit_with_rebate
-        else:
-            best_discount = best_discount_no_rebate
-            best_profit = best_profit_no_rebate
-
-        if best_discount is not None:
-            try:
-                if portal == 'Ajio':
-                    detail_result = profit_calc_func(best_discount, row, kwargs.get('all_cost_percent', 42), show_details=True)
-                elif portal == 'Myntra':
-                    detail_result = profit_calc_func(best_discount, row, show_details=True, price_endings=price_endings)
-                else:
-                    detail_result = profit_calc_func(best_discount, row, show_details=True)
-                if isinstance(detail_result, dict):
-                    details = detail_result['details']
-                    best_selling_price = details.get('selling_price')
-                    best_gross_settlement = details.get('gross_settlement')
-            except Exception as e:
-                logger.warning(f"Error fetching selling price for best discount in row {idx}: {str(e)}")
+                logger.warning(f"Error calculating profit for selling price ₹{selling_price} in row {idx}: {str(e)} | Row data: {dict(row)}")
+                row_profit[f'₹{int(selling_price)}'] = None
+                row_profit_abs[f'₹{int(selling_price)}'] = None
 
         # Profit at the REBATE TD threshold discount
         if portal == 'Myntra' and mbb_td_row > 0:
             try:
-                mbb_profit_abs, mbb_profit_pct = profit_calc_func(int(mbb_td_row), row, price_endings=price_endings)
+                rebate_selling_price = round_price_to_end_with_nine(mrp_row - (mrp_row * mbb_td_row / 100))
+                mbb_profit_abs, mbb_profit_pct = calculate_profit_from_selling_price(portal, rebate_selling_price, row, **kwargs)
                 row_profit['REBATE TD Discount'] = int(mbb_td_row)
                 row_profit['Profit at REBATE TD'] = round(mbb_profit_abs, 2)
                 row_profit['Profit % at REBATE TD'] = round(mbb_profit_pct, 2)
@@ -1268,6 +1334,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         row_profit['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
         row_profit['Gross Settlement'] = round(best_gross_settlement, 2) if best_gross_settlement is not None else None
         row_profit['Best Profit (₹)'] = best_profit
+        row_profit['Best Profit %'] = round(best_profit_percent, 2) if best_selling_price is not None else None
         row_profit['Weird Profit Jump'] = ','.join(str(x) for x in weird_jumps)
         profit_data.append(row_profit)
 
@@ -1275,6 +1342,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         row_profit_abs['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
         row_profit_abs['Gross Settlement'] = round(best_gross_settlement, 2) if best_gross_settlement is not None else None
         row_profit_abs['Best Profit (₹)'] = best_profit
+        row_profit_abs['Best Profit %'] = round(best_profit_percent, 2) if best_selling_price is not None else None
         profit_data_abs.append(row_profit_abs)
 
     progress_bar.empty()
@@ -1283,12 +1351,12 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
     logger.info(f"Completed processing {len(profit_data)} rows for {portal}")
     
     # Log summary statistics
-    products_with_target = sum(1 for row in profit_data if row.get('Best Discount') is not None)
+    products_with_target = sum(1 for row in profit_data if row.get('Best Selling Price') is not None)
     logger.info(f"Summary: {products_with_target}/{len(profit_data)} products met target profit criteria")
     
     def _reorder(df_in):
         cols = df_in.columns.tolist()
-        for c in ['Best Profit (₹)', 'Gross Settlement', 'Best Selling Price', 'Best Discount']:
+        for c in ['Best Profit %', 'Best Profit (₹)', 'Gross Settlement', 'Best Discount', 'Best Selling Price']:
             if c in cols:
                 cols.insert(0, cols.pop(cols.index(c)))
         for mbb_col in ['Profit % at REBATE TD', 'Profit at REBATE TD', 'REBATE TD Discount']:
@@ -1657,7 +1725,7 @@ def validate_and_convert_dataframe(df, portal, required_columns):
     numeric_columns = {
         'Myntra': ['MRP', 'CP', 'GST'],
         'Ajio': ['CP', 'Listing MRP', 'GST'],
-        'TataCliq': ['CP', 'MRP', 'GST RATE'],
+        'TataCliq': ['CP', 'MRP', 'GST RATE', 'Processing fee'],
         'Nykaa': ['MRP', 'cp', 'gst', 'shipping'],
         'Pepperfry': ['cp', 'mrp', 'gst']
     }
@@ -1747,7 +1815,9 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
             df3 = df3.set_index('EAN')
         elif portal == 'TataCliq':
             required_cols = ['SKU Code', 'CP', 'MRP', 'GST RATE']
-            df2 = df1[required_cols]
+            optional_cols = ['Processing fee']
+            cols_to_use = required_cols + [c for c in optional_cols if c in df1.columns]
+            df2 = df1[cols_to_use]
             df3 = df2.copy()
             df3 = df3.set_index('SKU Code')
         elif portal == 'Nykaa':
@@ -1966,7 +2036,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             elif saved_mode == 'selling_price':
                 mode_text = "Selling Price Analysis"
             else:
-                mode_text = "Discount Analysis"
+                mode_text = "9-Ending Selling Price Analysis"
             st.header(f"📈 Analysis Results - {portal_name} ({mode_text})")
 
             # Summary statistics
@@ -2002,7 +2072,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                     st.metric("Avg. Min SP (₹)", f"₹{avg_sp:.0f}")
             else:
                 with col2:
-                    products_with_target = len(result_df[result_df['Best Discount'].notna()])
+                    products_with_target = len(result_df[result_df['Best Selling Price'].notna()])
                     st.metric("Products Meeting Target", products_with_target)
 
                 with col3:
@@ -2021,7 +2091,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             if show_detailed_calc:
                 st.markdown("---")
                 if saved_mode == 'discount':
-                    with st.expander("🔍 Detailed Calculations (First 2 Rows - Best Discount)", expanded=False):
+                    with st.expander("🔍 Detailed Calculations (First 2 Rows - Best 9-Ending Selling Price)", expanded=False):
                         display_detailed_calculations(processed_df, portal_name, result_df, **saved_extra_params)
                 elif saved_mode == 'mrp':
                     with st.expander("🔍 Detailed Calculations (First 2 Rows - Optimal MRP)", expanded=False):
@@ -2070,7 +2140,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             'Myntra': ['ARTICLE NO', 'MRP', 'CP', 'GST',
                        'SHIPPING', 'COMMISSION %', 'FIXED FEE', 'REBATE TD', 'REBATE SP', 'REBATE VALUE'],
             'Ajio': ['EAN', 'CP', 'Listing MRP', 'GST'],
-            'TataCliq': ['SKU Code', 'CP', 'MRP', 'GST RATE'],
+            'TataCliq': ['SKU Code', 'CP', 'MRP', 'GST RATE', 'Processing fee'],
             'Nykaa': ['SKU Code', 'MRP', 'cp', 'gst', 'shipping'],
             'Pepperfry': ['van', 'cp', 'mrp', 'gst'],
         }
@@ -2219,20 +2289,17 @@ def tatacliq_page():
     """TataCliq pricing analyzer page"""
     calculation_info = """
     **TataCliq Calculation Includes:**
-    - Selling price = MRP - (MRP × discount%)
+    - Selling price = ROUND(MRP - (MRP × discount%), nearest 10) - 1
     - GST value = GST RATE × selling price / 100
     - Commission: ₹150 for orders < ₹500, 25% of selling price for orders ≥ ₹500
     - IGST = 18% of commission
     - Total fees = Commission + IGST
     - Shipping charge: ₹0 for orders < ₹500, ₹118 for orders ≥ ₹500
     - Marketing fees = 5% of selling price
-    - Total cost = GST value + shipping charge + total fees + CP + marketing fees
+    - Processing fee = Processing fee column value, or ₹49 if absent
+    - Processing fee GST = 18% of processing fee
+    - Total cost = GST value + shipping charge + total fees + CP + marketing fees + processing fee + processing fee GST
     - Profit = Selling price - Total cost
-    
-    **Nine-Ending Pricing Strategy:**
-    - When enabled, selling prices are rounded to end with 9 (e.g., 329, 459, 199)
-    - This is a common psychological pricing strategy used in retail
-    - The system calculates the initial selling price and then adjusts it to end with 9
     """
     
     data_format_info = """
@@ -2241,27 +2308,17 @@ def tatacliq_page():
     - **CP**: Cost price (must be numeric)
     - **MRP**: Maximum Retail Price (must be numeric)
     - **GST RATE**: GST percentage rate (must be numeric)
+    - **Processing fee**: Optional processing fee; defaults to ₹49 if missing
     
     **Important Data Format Notes:**
-    - Numeric columns (CP, MRP, GST RATE) should be formatted as **Number** in Excel, not Text
+    - Numeric columns (CP, MRP, GST RATE, Processing fee) should be formatted as **Number** in Excel, not Text
     - Identifier columns (SKU Code) should remain as **Text** format
     - If numeric columns are formatted as Text, the system will automatically convert them
     - Empty or invalid numeric values will be treated as 0
     - TataCliq uses a complex calculation with variable commission and shipping charges based on order value
     """
     
-    # Additional inputs for TataCliq
-    additional_inputs = [
-        {
-            'key': 'use_nine_ending',
-            'type': 'checkbox',
-            'label': 'Use Nine-Ending Pricing Strategy',
-            'default': False,
-            'help': 'Round selling prices to end with 9 (e.g., 329, 459, 199)'
-        }
-    ]
-    
-    create_portal_page("TataCliq", "🛒", calculation_info, data_format_info, additional_inputs)
+    create_portal_page("TataCliq", "🛒", calculation_info, data_format_info)
 
 def nykaa_page():
     """Nykaa pricing analyzer page"""
@@ -2272,8 +2329,10 @@ def nykaa_page():
     - Commission = 28% of selling price
     - Commission tax = 18% of commission
     - Total commission = Commission + Commission tax
-    - Marketing fees = 1% of selling price
-    - Total cost = CP + GST value + shipping + marketing fees + total commission
+    - Marketing fees = 10% of selling price
+    - Payment fee = 0.8% of selling price
+    - Payment fee GST = 18% of payment fee
+    - Total cost = CP + GST value + shipping + marketing fees + total commission + payment fee + payment fee GST
     - Profit = Selling price - Total cost
     """
     
