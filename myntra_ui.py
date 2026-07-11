@@ -1780,6 +1780,20 @@ def validate_and_convert_dataframe(df, portal, required_columns):
     
     return df_processed
 
+def get_portal_columns(df, portal, required_cols, optional_cols=None):
+    """Return validated portal columns, preserving optional columns when present."""
+    optional_cols = optional_cols or []
+    missing_cols = [col for col in required_cols if col not in df.columns]
+
+    if missing_cols:
+        available_cols = [str(col) for col in df.columns if col is not None]
+        raise ValueError(
+            f"Missing required columns for {portal}: {missing_cols}. "
+            f"Available columns: {available_cols}"
+        )
+
+    return required_cols + [col for col in optional_cols if col in df.columns]
+
 def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal, calculation_mode='discount', **kwargs):
     try:
         logger.info(f"Processing Excel file: {uploaded_file.name} for {portal} in {calculation_mode} mode")
@@ -1802,7 +1816,7 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
             required_cols = ['ARTICLE NO', 'MRP', 'CP', 'GST',
                            'SHIPPING', 'COMMISSION %', 'FIXED FEE']
             optional_cols = ['REBATE TD', 'REBATE SP', 'REBATE VALUE']
-            cols_to_use = required_cols + [c for c in optional_cols if c in df1.columns]
+            cols_to_use = get_portal_columns(df1, portal, required_cols, optional_cols)
             df2 = df1[cols_to_use]
             df3 = df2.copy()
             df3 = df3.set_index('ARTICLE NO')
@@ -1810,24 +1824,24 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
             # For Ajio, only need basic columns for simple calculation
             # required_cols = ['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status']
             required_cols = ['EAN', 'CP', 'Listing MRP', 'GST']
-            df2 = df1[required_cols]
+            df2 = df1[get_portal_columns(df1, portal, required_cols)]
             df3 = df2.copy()
             df3 = df3.set_index('EAN')
         elif portal == 'TataCliq':
             required_cols = ['SKU Code', 'CP', 'MRP', 'GST RATE']
             optional_cols = ['Processing fee']
-            cols_to_use = required_cols + [c for c in optional_cols if c in df1.columns]
+            cols_to_use = get_portal_columns(df1, portal, required_cols, optional_cols)
             df2 = df1[cols_to_use]
             df3 = df2.copy()
             df3 = df3.set_index('SKU Code')
         elif portal == 'Nykaa':
             required_cols = ['SKU Code', 'MRP', 'cp', 'gst', 'shipping']
-            df2 = df1[required_cols]
+            df2 = df1[get_portal_columns(df1, portal, required_cols)]
             df3 = df2.copy()
             df3 = df3.set_index('SKU Code')
         elif portal == 'Pepperfry':
             required_cols = ['van', 'cp', 'mrp', 'gst']
-            df2 = df1[required_cols]
+            df2 = df1[get_portal_columns(df1, portal, required_cols)]
             df3 = df2.copy()
             df3 = df3.set_index('van')
         
@@ -1856,7 +1870,7 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         st.error(f"Error processing file: {str(e)}")
-        return None, None, None
+        return None, None, None, None
 
 def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_info, additional_inputs=None, calculation_modes=None):
     """Create a page for a specific portal"""
