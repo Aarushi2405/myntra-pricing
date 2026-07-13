@@ -1249,7 +1249,8 @@ def display_detailed_mrp_calculations(df, portal, result_df, **kwargs):
 
 def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, **kwargs):
     profit_data = []
-    profit_data_abs = []
+    include_price_matrix = kwargs.get('include_price_matrix', False)
+    profit_data_abs = [] if include_price_matrix else None
     
     logger.info(f"Starting profit table build for {portal} with {len(df)} rows")
     logger.info(f"Target profit: {target_profit_percent}%, Min absolute profit: {min_absolute_profit}")
@@ -1266,7 +1267,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
             progress_bar.progress((idx + 1) / total_rows)
         
         row_profit = {}
-        row_profit_abs = {}
+        row_profit_abs = {} if include_price_matrix else None
         best_discount = None
         best_profit = 0
         best_profit_percent = 0
@@ -1295,9 +1296,10 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
                     discount = ((mrp_row - selling_price) / mrp_row * 100) if mrp_row > 0 else 0
                     gross_settlement = None
 
-                price_key = f'₹{int(selling_price)}'
-                row_profit[price_key] = round(profit_pct, 2)
-                row_profit_abs[price_key] = round(profit, 2)
+                if include_price_matrix:
+                    price_key = f'₹{int(selling_price)}'
+                    row_profit[price_key] = round(profit_pct, 2)
+                    row_profit_abs[price_key] = round(profit, 2)
 
                 if profit_pct >= target_profit_percent and profit > min_absolute_profit:
                     if best_selling_price is None or selling_price < best_selling_price:
@@ -1313,8 +1315,9 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
 
             except Exception as e:
                 logger.warning(f"Error calculating profit for selling price ₹{selling_price} in row {idx}: {str(e)} | Row data: {dict(row)}")
-                row_profit[f'₹{int(selling_price)}'] = None
-                row_profit_abs[f'₹{int(selling_price)}'] = None
+                if include_price_matrix:
+                    row_profit[f'₹{int(selling_price)}'] = None
+                    row_profit_abs[f'₹{int(selling_price)}'] = None
 
         # Profit at the REBATE TD threshold discount
         if portal == 'Myntra' and mbb_td_row > 0:
@@ -1338,12 +1341,13 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         row_profit['Weird Profit Jump'] = ','.join(str(x) for x in weird_jumps)
         profit_data.append(row_profit)
 
-        row_profit_abs['Best Discount'] = best_discount
-        row_profit_abs['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
-        row_profit_abs['Gross Settlement'] = round(best_gross_settlement, 2) if best_gross_settlement is not None else None
-        row_profit_abs['Best Profit (₹)'] = best_profit
-        row_profit_abs['Best Profit %'] = round(best_profit_percent, 2) if best_selling_price is not None else None
-        profit_data_abs.append(row_profit_abs)
+        if include_price_matrix:
+            row_profit_abs['Best Discount'] = best_discount
+            row_profit_abs['Best Selling Price'] = round(best_selling_price, 2) if best_selling_price is not None else None
+            row_profit_abs['Gross Settlement'] = round(best_gross_settlement, 2) if best_gross_settlement is not None else None
+            row_profit_abs['Best Profit (₹)'] = best_profit
+            row_profit_abs['Best Profit %'] = round(best_profit_percent, 2) if best_selling_price is not None else None
+            profit_data_abs.append(row_profit_abs)
 
     progress_bar.empty()
     status_text.empty()
@@ -1365,7 +1369,7 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         return df_in[cols]
 
     combined_df = _reorder(pd.DataFrame(profit_data, index=df.index))
-    combined_abs_df = _reorder(pd.DataFrame(profit_data_abs, index=df.index))
+    combined_abs_df = _reorder(pd.DataFrame(profit_data_abs, index=df.index)) if include_price_matrix else None
 
     return combined_df, combined_abs_df
 
@@ -1872,6 +1876,25 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
         st.error(f"Error processing file: {str(e)}")
         return None, None, None, None
 
+def get_display_result_df(result_df, calculation_mode):
+    """Return a compact dataframe for browser display."""
+    if result_df is None or calculation_mode != 'discount':
+        return result_df
+
+    summary_cols = [
+        'Profit % at REBATE TD',
+        'Profit at REBATE TD',
+        'REBATE TD Discount',
+        'Best Profit %',
+        'Best Profit (₹)',
+        'Gross Settlement',
+        'Best Discount',
+        'Best Selling Price',
+        'Weird Profit Jump',
+    ]
+    available_cols = [col for col in summary_cols if col in result_df.columns]
+    return result_df[available_cols] if available_cols else result_df
+
 def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_info, additional_inputs=None, calculation_modes=None):
     """Create a page for a specific portal"""
     st.title(f"{portal_emoji} {portal_name} Pricing Analyzer")
@@ -1948,6 +1971,13 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         
         # Additional inputs based on calculation mode
         extra_params = {'calculation_mode': calculation_mode}
+
+        if calculation_mode == 'discount':
+            extra_params['include_price_matrix'] = st.checkbox(
+                "Include Full Price Matrix in Excel",
+                value=False,
+                help="Adds one column for each tested selling price. Leave off for faster, more stable processing."
+            )
         
         # For MRP calculation mode, add discount input
         if calculation_mode == 'mrp':
@@ -2099,7 +2129,11 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
 
             # Display the results table
             st.subheader("📋 Detailed Results")
-            st.dataframe(result_df, use_container_width=True)
+            display_df = get_display_result_df(result_df, saved_mode)
+            st.dataframe(display_df, use_container_width=True)
+            hidden_cols = len(result_df.columns) - len(display_df.columns)
+            if hidden_cols > 0:
+                st.info(f"Showing summary columns in the browser. {hidden_cols} full matrix columns are included in the Excel export.")
 
             # Detailed calculations in expandable block
             if show_detailed_calc:
@@ -2128,7 +2162,9 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                result_df.to_excel(writer, sheet_name=f'{portal_name} Analysis')
+                display_df.to_excel(writer, sheet_name=f'{portal_name} Summary')
+                if hidden_cols > 0:
+                    result_df.to_excel(writer, sheet_name='Full Price Matrix')
                 if abs_profit_df is not None:
                     abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
                 if original_df is not None:
