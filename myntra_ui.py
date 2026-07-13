@@ -10,6 +10,7 @@ import os
 import uuid
 import traceback
 import gc
+import html
 from decimal import Decimal, ROUND_HALF_UP
 
 # Configure logging
@@ -1996,6 +1997,78 @@ def get_display_result_df(result_df, calculation_mode):
     available_cols = [col for col in summary_cols if col in result_df.columns]
     return result_df[available_cols] if available_cols else result_df
 
+def format_table_value(value):
+    """Format a dataframe cell for lightweight HTML display."""
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float):
+        return f"{value:.2f}"
+    return str(value)
+
+def render_dataframe_html(df, key, page_size=250):
+    """Render a dataframe without Streamlit's pyarrow-backed dataframe element."""
+    if df is None:
+        st.info("No data to display.")
+        return
+
+    total_rows = len(df)
+    if total_rows == 0:
+        st.info("No rows to display.")
+        return
+
+    total_pages = max(1, (total_rows + page_size - 1) // page_size)
+    page = 1
+    if total_pages > 1:
+        page = st.number_input(
+            "Page",
+            min_value=1,
+            max_value=total_pages,
+            value=1,
+            step=1,
+            key=f"{key}_page"
+        )
+
+    start = (int(page) - 1) * page_size
+    end = min(start + page_size, total_rows)
+    page_df = df.iloc[start:end]
+
+    st.caption(f"Showing rows {start + 1}-{end} of {total_rows}")
+
+    headers = ["Index"] + [str(col) for col in page_df.columns]
+    header_html = "".join(f"<th>{html.escape(col)}</th>" for col in headers)
+    rows_html = []
+
+    for index, row in page_df.iterrows():
+        cells = [f"<td>{html.escape(str(index))}</td>"]
+        cells.extend(
+            f"<td>{html.escape(format_table_value(value))}</td>"
+            for value in row
+        )
+        rows_html.append(f"<tr>{''.join(cells)}</tr>")
+
+    table_html = f"""
+    <div style="overflow:auto; max-height: 640px; border: 1px solid #e5e7eb;">
+      <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
+        <thead style="position: sticky; top: 0; background: #f8fafc;">
+          <tr>{header_html}</tr>
+        </thead>
+        <tbody>{''.join(rows_html)}</tbody>
+      </table>
+    </div>
+    <style>
+      table th, table td {{
+        border-bottom: 1px solid #e5e7eb;
+        padding: 6px 8px;
+        text-align: left;
+        white-space: nowrap;
+      }}
+      table th {{
+        font-weight: 600;
+      }}
+    </style>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
+
 def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_info, additional_inputs=None, calculation_modes=None):
     """Create a page for a specific portal"""
     if 'app_trace_id' not in st.session_state:
@@ -2322,7 +2395,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 hidden_cols=hidden_cols
             )
             try:
-                st.dataframe(display_df, use_container_width=True)
+                render_dataframe_html(display_df, key=f"{state_key}_results_table")
                 log_event('render_table_completed', trace_id, portal=portal_name)
             except Exception as e:
                 log_event(
@@ -2334,7 +2407,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                     display_df=dataframe_snapshot(display_df)
                 )
                 st.error(f"Results were calculated but the table failed to render. Trace ID: {trace_id}")
-                st.write(display_df.head(50))
+                st.markdown(display_df.head(50).to_html(), unsafe_allow_html=True)
                 return
             hidden_cols = len(result_df.columns) - len(display_df.columns)
             if hidden_cols > 0:
@@ -2792,28 +2865,7 @@ def commission_analysis_page():
     display_cols = ["Category", "Price Band", "Cheapest Brand", "Lowest Commission (%)"] + [b for b in brands if b in selected_brands]
     display_df = filtered[display_cols].copy()
 
-    def highlight_cheapest(row):
-        styles = [""] * len(row)
-        cheapest = [b.strip() for b in str(row.get("Cheapest Brand", "")).split(" / ")]
-        for i, col in enumerate(row.index):
-            if col in brands:
-                val = row[col]
-                if val is None or pd.isna(val):
-                    styles[i] = "color: #aaa"
-                elif col in cheapest:
-                    styles[i] = "background-color: #C6EFCE; font-weight: bold"
-                else:
-                    styles[i] = "background-color: #FFC7CE"
-        return styles
-
-    st.dataframe(
-        display_df.style.apply(highlight_cheapest, axis=1).format(
-            {b: lambda x: f"{x:.0f}%" if x is not None and not pd.isna(x) else "N/A" for b in brands},
-            na_rep="N/A"
-        ),
-        use_container_width=True,
-        height=500,
-    )
+    render_dataframe_html(display_df, key="commission_rates_table")
 
     # ── Pivot: cheapest brand per category across bands ───────────────────
     st.markdown("---")
@@ -2821,7 +2873,7 @@ def commission_analysis_page():
     pivot = filtered.pivot_table(
         index="Category", columns="Price Band", values="Cheapest Brand", aggfunc="first"
     ).reindex(columns=price_bands)
-    st.dataframe(pivot, use_container_width=True)
+    render_dataframe_html(pivot, key="commission_pivot_table")
 
     # ── Download ──────────────────────────────────────────────────────────
     st.markdown("---")
