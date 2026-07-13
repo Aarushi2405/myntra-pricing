@@ -9,6 +9,7 @@ import sys
 import os
 import uuid
 import traceback
+import gc
 from decimal import Decimal, ROUND_HALF_UP
 
 # Configure logging
@@ -30,6 +31,7 @@ def setup_logging():
 
 # Initialize logger
 logger = setup_logging()
+CONVERSION_WARNING_COUNTS = {}
 
 def get_memory_snapshot():
     """Return a small runtime memory snapshot for deployment logs."""
@@ -49,7 +51,7 @@ def dataframe_snapshot(df):
         'shape': tuple(df.shape),
         'columns': columns,
         'extra_columns': extra_cols,
-        'memory_mb': round(df.memory_usage(deep=True).sum() / (1024 * 1024), 2)
+        'memory_mb': round(df.memory_usage(index=True).sum() / (1024 * 1024), 2)
     }
 
 def log_event(event, trace_id=None, **details):
@@ -883,11 +885,35 @@ def get_portal_mrp(row, portal):
     column = mrp_columns.get(portal, 'MRP')
     return safe_convert_to_numeric(row.get(column, 0), column, 0)
 
+def get_portal_cp(row, portal):
+    """Return the cost price column used for row-level validation."""
+    cp_columns = {
+        'Myntra': 'CP',
+        'Ajio': 'CP',
+        'TataCliq': 'CP',
+        'Nykaa': 'cp',
+        'Pepperfry': 'cp',
+    }
+    column = cp_columns.get(portal, 'CP')
+    return safe_convert_to_numeric(row.get(column, 0), column, 0)
+
 def generate_nine_ending_prices(mrp):
     """Generate selling prices ending in 9, from low to high, up to MRP."""
     if pd.isna(mrp) or mrp <= 0:
-        return []
-    return list(range(9, int(mrp) + 1, 10))
+        return range(0)
+    return range(9, int(mrp) + 1, 10)
+
+def generate_selected_ending_prices(mrp, selected_endings):
+    """Yield candidate selling prices for selected endings without building a list."""
+    if pd.isna(mrp) or mrp <= 0:
+        return
+
+    max_mrp = int(mrp)
+    for base in range(0, max_mrp + 100, 100):
+        for ending in selected_endings:
+            price = base + ending
+            if 0 < price <= mrp:
+                yield price
 
 def calculate_profit_from_selling_price(portal, selling_price, row, show_details=False, **kwargs):
     """Calculate portal profit from an explicit selling price."""
@@ -1319,6 +1345,26 @@ def build_profit_table(df, target_profit_percent, min_absolute_profit, portal, *
         mbb_rsp_row = safe_convert_to_numeric(row.get('REBATE SP', 0), 'REBATE SP', 0) if portal == 'Myntra' else 0
 
         mrp_row = get_portal_mrp(row, portal)
+        cp_row = get_portal_cp(row, portal)
+
+        if pd.isna(mrp_row) or mrp_row <= 0 or pd.isna(cp_row) or cp_row <= 0:
+            row_profit['Best Discount'] = None
+            row_profit['Best Selling Price'] = None
+            row_profit['Gross Settlement'] = None
+            row_profit['Best Profit (₹)'] = 0
+            row_profit['Best Profit %'] = None
+            row_profit['Weird Profit Jump'] = ''
+            profit_data.append(row_profit)
+
+            if include_price_matrix:
+                row_profit_abs['Best Discount'] = None
+                row_profit_abs['Best Selling Price'] = None
+                row_profit_abs['Gross Settlement'] = None
+                row_profit_abs['Best Profit (₹)'] = 0
+                row_profit_abs['Best Profit %'] = None
+                profit_data_abs.append(row_profit_abs)
+            continue
+
         selling_prices = generate_nine_ending_prices(mrp_row)
 
         for selling_price in selling_prices:
@@ -1432,8 +1478,9 @@ def build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profi
         
         try:
             mrp = safe_convert_to_numeric(row['MRP'], 'MRP', 0)
+            cp = safe_convert_to_numeric(row.get('CP', 0), 'CP', 0)
             
-            if pd.isna(mrp) or mrp <= 0:
+            if pd.isna(mrp) or mrp <= 0 or pd.isna(cp) or cp <= 0:
                 # Skip invalid rows
                 profit_data.append({
                     'Best Discount': None,
@@ -1620,13 +1667,14 @@ def build_selling_price_table(df, target_profit_percent, min_absolute_profit, po
                 continue
 
             mrp = safe_convert_to_numeric(row['MRP'], 'MRP', 0)
-            if pd.isna(mrp) or mrp <= 0:
+            cp = safe_convert_to_numeric(row.get('CP', 0), 'CP', 0)
+            if pd.isna(mrp) or mrp <= 0 or pd.isna(cp) or cp <= 0:
                 row_sp['Minimum Selling Price'] = None
                 row_sp['Equivalent Discount'] = None
                 row_sp['Gross Settlement'] = None
                 row_sp['Profit'] = 0
                 row_sp['Profit %'] = 0
-                row_sp['Status'] = 'Invalid MRP'
+                row_sp['Status'] = 'Invalid MRP/CP'
                 sp_data.append(row_sp)
                 continue
 
@@ -1636,14 +1684,7 @@ def build_selling_price_table(df, target_profit_percent, min_absolute_profit, po
             best_gross_settlement = None
             equivalent_discount = None
 
-            candidate_prices = sorted(
-                price
-                for base in range(0, int(mrp) + 100, 100)
-                for ending in selected_endings
-                if 0 < (price := base + ending) <= mrp
-            )
-
-            for selling_price in candidate_prices:
+            for selling_price in generate_selected_ending_prices(mrp, selected_endings):
                 profit, profit_pct = profit_percent_from_selling_price_myntra(selling_price, row)
 
                 if profit_pct >= target_profit_percent and profit >= min_absolute_profit:
@@ -1695,6 +1736,14 @@ def safe_convert_to_numeric(value, column_name="", default_value=0):
     Returns:
         Numeric value or default_value if conversion fails
     """
+    def log_conversion_warning(message):
+        count = CONVERSION_WARNING_COUNTS.get(column_name, 0)
+        if count < 5:
+            logger.warning(message)
+        elif count == 5:
+            logger.warning(f"Further numeric conversion warnings suppressed for column '{column_name}'")
+        CONVERSION_WARNING_COUNTS[column_name] = count + 1
+
     # Handle Series objects by taking the first value
     if isinstance(value, pd.Series):
         if len(value) == 0:
@@ -1732,7 +1781,7 @@ def safe_convert_to_numeric(value, column_name="", default_value=0):
                 return int(numeric_value)
             return numeric_value
         except (ValueError, TypeError) as e:
-            logger.warning(f"Could not convert '{value}' to numeric in column '{column_name}': {str(e)}. Using default value {default_value}")
+            log_conversion_warning(f"Could not convert '{value}' to numeric in column '{column_name}': {str(e)}. Using default value {default_value}")
             return default_value
     
     # For other types, try direct conversion
@@ -1742,7 +1791,7 @@ def safe_convert_to_numeric(value, column_name="", default_value=0):
             value = value.item()
         return float(value)
     except (ValueError, TypeError, AttributeError) as e:
-        logger.warning(f"Could not convert {type(value).__name__} '{value}' to numeric in column '{column_name}': {str(e)}. Using default value {default_value}")
+        log_conversion_warning(f"Could not convert {type(value).__name__} '{value}' to numeric in column '{column_name}': {str(e)}. Using default value {default_value}")
         return default_value
 
 def validate_and_convert_dataframe(df, portal, required_columns):
@@ -1837,56 +1886,68 @@ def get_portal_columns(df, portal, required_cols, optional_cols=None):
 
     return required_cols + [col for col in optional_cols if col in df.columns]
 
+def get_portal_requirements(portal):
+    """Return required and optional columns for a portal."""
+    if portal == 'Myntra':
+        return ['ARTICLE NO', 'MRP', 'CP', 'GST', 'SHIPPING', 'COMMISSION %', 'FIXED FEE'], ['REBATE TD', 'REBATE SP', 'REBATE VALUE'], 'ARTICLE NO'
+    if portal == 'Ajio':
+        return ['EAN', 'CP', 'Listing MRP', 'GST'], [], 'EAN'
+    if portal == 'TataCliq':
+        return ['SKU Code', 'CP', 'MRP', 'GST RATE'], ['Processing fee'], 'SKU Code'
+    if portal == 'Nykaa':
+        return ['SKU Code', 'MRP', 'cp', 'gst', 'shipping'], [], 'SKU Code'
+    if portal == 'Pepperfry':
+        return ['van', 'cp', 'mrp', 'gst'], [], 'van'
+    raise ValueError(f"Unsupported portal: {portal}")
+
+def load_portal_dataframe(uploaded_file, portal):
+    """Read only the columns needed for the selected portal."""
+    required_cols, optional_cols, index_col = get_portal_requirements(portal)
+    uploaded_file.seek(0)
+    wb = openpyxl.load_workbook(uploaded_file, data_only=False, read_only=True)
+    try:
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        header = next(rows_iter, None)
+        if not header:
+            raise ValueError("Uploaded Excel file is empty")
+
+        header = list(header[:52])
+        header_positions = {}
+        for idx, col in enumerate(header):
+            if col is not None and col not in header_positions:
+                header_positions[col] = idx
+
+        missing_cols = [col for col in required_cols if col not in header_positions]
+        if missing_cols:
+            available_cols = [str(col) for col in header if col is not None]
+            raise ValueError(
+                f"Missing required columns for {portal}: {missing_cols}. "
+                f"Available columns: {available_cols}"
+            )
+
+        cols_to_use = required_cols + [col for col in optional_cols if col in header_positions]
+        selected_positions = [header_positions[col] for col in cols_to_use]
+
+        data = []
+        for row in rows_iter:
+            data.append([
+                row[pos] if pos < len(row) else None
+                for pos in selected_positions
+            ])
+
+        df = pd.DataFrame(data, columns=cols_to_use)
+        df = df.set_index(index_col)
+        logger.info(f"Excel file loaded for {portal} with {len(df)} rows and {len(df.columns)} selected columns")
+        return df, required_cols
+    finally:
+        wb.close()
+
 def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal, calculation_mode='discount', **kwargs):
     try:
         logger.info(f"Processing Excel file: {uploaded_file.name} for {portal} in {calculation_mode} mode")
-        
-        # Read the uploaded file
-        wb = openpyxl.load_workbook(uploaded_file, data_only=False)
-        ws = wb.active
 
-        data = []
-        for row in ws.iter_rows(values_only=True):
-            data.append(row)
-        
-        df_formulas = pd.DataFrame(data[1:], columns=data[0])
-        df1 = df_formulas.iloc[:, :52]
-        
-        logger.info(f"Excel file loaded with {len(df1)} rows and {len(df1.columns)} columns")
-        
-        # Different column requirements based on portal
-        if portal == 'Myntra':
-            required_cols = ['ARTICLE NO', 'MRP', 'CP', 'GST',
-                           'SHIPPING', 'COMMISSION %', 'FIXED FEE']
-            optional_cols = ['REBATE TD', 'REBATE SP', 'REBATE VALUE']
-            cols_to_use = get_portal_columns(df1, portal, required_cols, optional_cols)
-            df2 = df1[cols_to_use]
-            df3 = df2.copy()
-            df3 = df3.set_index('ARTICLE NO')
-        elif portal == 'Ajio':
-            # For Ajio, only need basic columns for simple calculation
-            # required_cols = ['ARTICLE NO', 'MRP', 'DISCOUNT %', 'stock status']
-            required_cols = ['EAN', 'CP', 'Listing MRP', 'GST']
-            df2 = df1[get_portal_columns(df1, portal, required_cols)]
-            df3 = df2.copy()
-            df3 = df3.set_index('EAN')
-        elif portal == 'TataCliq':
-            required_cols = ['SKU Code', 'CP', 'MRP', 'GST RATE']
-            optional_cols = ['Processing fee']
-            cols_to_use = get_portal_columns(df1, portal, required_cols, optional_cols)
-            df2 = df1[cols_to_use]
-            df3 = df2.copy()
-            df3 = df3.set_index('SKU Code')
-        elif portal == 'Nykaa':
-            required_cols = ['SKU Code', 'MRP', 'cp', 'gst', 'shipping']
-            df2 = df1[get_portal_columns(df1, portal, required_cols)]
-            df3 = df2.copy()
-            df3 = df3.set_index('SKU Code')
-        elif portal == 'Pepperfry':
-            required_cols = ['van', 'cp', 'mrp', 'gst']
-            df2 = df1[get_portal_columns(df1, portal, required_cols)]
-            df3 = df2.copy()
-            df3 = df3.set_index('van')
+        df3, required_cols = load_portal_dataframe(uploaded_file, portal)
         
         # Validate and convert data types to handle text-formatted numbers
         df3 = validate_and_convert_dataframe(df3, portal, required_cols)
@@ -1906,7 +1967,8 @@ def process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal
             result_df, abs_profit_df = build_profit_table(df3, float(target_profit), float(min_absolute_profit), portal, **kwargs)
 
         logger.info(f"Successfully completed processing for {portal}")
-        return result_df, df_formulas, df3, abs_profit_df
+        gc.collect()
+        return result_df, None, df3, abs_profit_df
         
     except Exception as e:
         logger.error(f"Error processing file: {str(e)} | File: {uploaded_file.name if uploaded_file else 'Unknown'} | Portal: {portal}")
@@ -2023,11 +2085,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         extra_params = {'calculation_mode': calculation_mode}
 
         if calculation_mode == 'discount':
-            extra_params['include_price_matrix'] = st.checkbox(
-                "Include Full Price Matrix in Excel",
-                value=False,
-                help="Adds one column for each tested selling price. Leave off for faster, more stable processing."
-            )
+            extra_params['include_price_matrix'] = False
         
         # For MRP calculation mode, add discount input
         if calculation_mode == 'mrp':
@@ -2677,7 +2735,6 @@ def commission_analysis_page():
                     entry[f"{brand}_{band}"] = None
         rows.append(entry)
 
-    import numpy as np
     data = pd.DataFrame(rows).drop_duplicates("Article Type").reset_index(drop=True)
 
     # Build summary
@@ -2686,7 +2743,7 @@ def commission_analysis_page():
         cat = row["Article Type"]
         for band in price_bands:
             vals = {b: row[f"{b}_{band}"] for b in brands}
-            valid = {b: v for b, v in vals.items() if v is not None and not np.isnan(v)}
+            valid = {b: v for b, v in vals.items() if v is not None and not pd.isna(v)}
             if not valid:
                 continue
             min_val = min(valid.values())
@@ -2741,7 +2798,7 @@ def commission_analysis_page():
         for i, col in enumerate(row.index):
             if col in brands:
                 val = row[col]
-                if val is None or (isinstance(val, float) and np.isnan(val)):
+                if val is None or pd.isna(val):
                     styles[i] = "color: #aaa"
                 elif col in cheapest:
                     styles[i] = "background-color: #C6EFCE; font-weight: bold"
@@ -2751,7 +2808,7 @@ def commission_analysis_page():
 
     st.dataframe(
         display_df.style.apply(highlight_cheapest, axis=1).format(
-            {b: lambda x: f"{x:.0f}%" if x is not None and not np.isnan(x) else "N/A" for b in brands},
+            {b: lambda x: f"{x:.0f}%" if x is not None and not pd.isna(x) else "N/A" for b in brands},
             na_rep="N/A"
         ),
         use_container_width=True,
