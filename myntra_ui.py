@@ -1938,7 +1938,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
         # Show detailed calculations toggle
         show_detailed_calc = st.checkbox(
             "Show Detailed Calculations",
-            value=True,
+            value=False,
             help="Display detailed calculation breakdown in expandable section below results table"
         )
         
@@ -2049,6 +2049,8 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 result_df, original_df, processed_df, abs_profit_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
 
             if result_df is not None:
+                report_state_key = f"{state_key}_excel_report"
+                st.session_state.pop(report_state_key, None)
                 st.session_state[state_key] = {
                     'result_df': result_df,
                     'original_df': original_df,
@@ -2156,31 +2158,35 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
 
             # Download section
             st.header("💾 Download Results")
+            report_state_key = f"{state_key}_excel_report"
 
-            # Create Excel file in memory
-            current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            if st.button("Prepare Excel Report", key=f"{state_key}_prepare_report"):
+                current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    display_df.to_excel(writer, sheet_name=f'{portal_name} Summary')
+                    if hidden_cols > 0:
+                        result_df.to_excel(writer, sheet_name='Full Price Matrix')
+                    if abs_profit_df is not None:
+                        abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
+                    if original_df is not None:
+                        original_df.to_excel(writer, sheet_name='Original Data', index=False)
 
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                display_df.to_excel(writer, sheet_name=f'{portal_name} Summary')
-                if hidden_cols > 0:
-                    result_df.to_excel(writer, sheet_name='Full Price Matrix')
-                if abs_profit_df is not None:
-                    abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
-                if original_df is not None:
-                    original_df.to_excel(writer, sheet_name='Original Data', index=False)
-
-            excel_data = output.getvalue()
+                st.session_state[report_state_key] = {
+                    'data': output.getvalue(),
+                    'file_name': f'{portal_name.lower()}_pricing_analysis_{current_time}.xlsx'
+                }
 
             # Download button
-            st.download_button(
-                label="📥 Download Excel Report",
-                data=excel_data,
-                file_name=f'{portal_name.lower()}_pricing_analysis_{current_time}.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-
-            st.info(f"💡 The Excel file contains analysis for {portal_name} with your results and original data.")
+            if report_state_key in st.session_state:
+                report = st.session_state[report_state_key]
+                st.download_button(
+                    label="📥 Download Excel Report",
+                    data=report['data'],
+                    file_name=report['file_name'],
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+                st.info(f"💡 The Excel file contains analysis for {portal_name} with your results and original data.")
     
     else:
         st.info("👆 Please upload an Excel file to get started.")
