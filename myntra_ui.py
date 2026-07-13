@@ -6,23 +6,62 @@ import io
 import re
 import logging
 import sys
+import os
+import uuid
+import traceback
 from decimal import Decimal, ROUND_HALF_UP
 
 # Configure logging
 def setup_logging():
     """Set up logging configuration for the Streamlit app"""
+    handlers = [logging.StreamHandler(sys.stdout)]
+    try:
+        handlers.append(logging.FileHandler('myntra_pricing.log'))
+    except Exception as e:
+        print(f"Could not initialize file logging: {e}", file=sys.stderr)
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),  # Console output
-            logging.FileHandler('myntra_pricing.log')  # File output
-        ]
+        handlers=handlers,
+        force=True
     )
     return logging.getLogger(__name__)
 
 # Initialize logger
 logger = setup_logging()
+
+def get_memory_snapshot():
+    """Return a small runtime memory snapshot for deployment logs."""
+    try:
+        import resource
+        return {'ru_maxrss': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
+    except Exception:
+        return {'ru_maxrss': 'unavailable'}
+
+def dataframe_snapshot(df):
+    """Return safe dataframe metadata for logs without dumping data."""
+    if df is None:
+        return {'shape': None, 'columns': None}
+    columns = [str(col) for col in list(df.columns[:12])]
+    extra_cols = max(0, len(df.columns) - len(columns))
+    return {
+        'shape': tuple(df.shape),
+        'columns': columns,
+        'extra_columns': extra_cols,
+        'memory_mb': round(df.memory_usage(deep=True).sum() / (1024 * 1024), 2)
+    }
+
+def log_event(event, trace_id=None, **details):
+    """Log structured checkpoints that are easy to search in deployed logs."""
+    payload = {
+        'event': event,
+        'trace_id': trace_id,
+        'pid': os.getpid(),
+        'memory': get_memory_snapshot(),
+        **details
+    }
+    logger.info(f"APP_TRACE {payload}")
 
 # Import functions from your existing myntra_pricing.py
 def parse_excel_if(formula: str):
@@ -1897,11 +1936,22 @@ def get_display_result_df(result_df, calculation_mode):
 
 def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_info, additional_inputs=None, calculation_modes=None):
     """Create a page for a specific portal"""
+    if 'app_trace_id' not in st.session_state:
+        st.session_state['app_trace_id'] = uuid.uuid4().hex[:12]
+    trace_id = st.session_state['app_trace_id']
+    log_event(
+        'page_render_started',
+        trace_id,
+        portal=portal_name,
+        session_keys=list(st.session_state.keys())
+    )
+
     st.title(f"{portal_emoji} {portal_name} Pricing Analyzer")
     st.markdown(f"Upload your Excel file and set parameters to analyze pricing strategies for **{portal_name}**.")
     # Sidebar for inputs
     with st.sidebar:
         st.header("📥 Input Parameters")
+        st.caption(f"Trace ID: {trace_id}")
         
         # Logging level control
         log_level = st.selectbox(
@@ -2035,18 +2085,57 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
     # Console log display area
     with st.expander("📋 Console Logs", expanded=False):
         st.info("Console logs will appear here when processing starts. Check the terminal/console where you ran the Streamlit app for detailed logs.")
-        st.code("Logs are also saved to 'myntra_pricing.log' file in your project directory.", language="text")
+        st.code(f"Trace ID: {trace_id}\nSearch Railway logs for: APP_TRACE", language="text")
     
     # Main content area
     state_key = f"{portal_name}_results"
 
     if uploaded_file is not None:
         st.success(f"✅ File uploaded: {uploaded_file.name}")
+        log_event(
+            'file_uploaded',
+            trace_id,
+            portal=portal_name,
+            file_name=uploaded_file.name,
+            calculation_mode=calculation_mode,
+            target_profit=target_profit,
+            min_absolute_profit=min_absolute_profit,
+            extra_params=extra_params
+        )
 
         if process_button:
-            logger.info(f"User initiated processing for {portal_name} with target profit: {target_profit}%, min absolute profit: {min_absolute_profit}, mode: {calculation_mode}")
-            with st.spinner(f"Processing your data for {portal_name}... This may take a few minutes."):
-                result_df, original_df, processed_df, abs_profit_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
+            log_event(
+                'processing_started',
+                trace_id,
+                portal=portal_name,
+                file_name=uploaded_file.name,
+                calculation_mode=calculation_mode,
+                target_profit=target_profit,
+                min_absolute_profit=min_absolute_profit,
+                extra_params=extra_params
+            )
+            try:
+                with st.spinner(f"Processing your data for {portal_name}... This may take a few minutes."):
+                    result_df, original_df, processed_df, abs_profit_df = process_excel_file(uploaded_file, target_profit, min_absolute_profit, portal_name, **extra_params)
+                log_event(
+                    'processing_returned',
+                    trace_id,
+                    portal=portal_name,
+                    result_df=dataframe_snapshot(result_df),
+                    original_df=dataframe_snapshot(original_df),
+                    processed_df=dataframe_snapshot(processed_df),
+                    abs_profit_df=dataframe_snapshot(abs_profit_df)
+                )
+            except Exception as e:
+                log_event(
+                    'processing_unhandled_exception',
+                    trace_id,
+                    portal=portal_name,
+                    error=str(e),
+                    traceback=traceback.format_exc()
+                )
+                st.error(f"Processing failed unexpectedly. Trace ID: {trace_id}")
+                result_df, original_df, processed_df, abs_profit_df = None, None, None, None
 
             if result_df is not None:
                 report_state_key = f"{state_key}_excel_report"
@@ -2061,8 +2150,31 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                     'target_profit': target_profit,
                     'min_absolute_profit': min_absolute_profit,
                 }
+                log_event(
+                    'session_saved',
+                    trace_id,
+                    portal=portal_name,
+                    state_key=state_key,
+                    session_keys=list(st.session_state.keys()),
+                    result_df=dataframe_snapshot(result_df)
+                )
+            else:
+                log_event(
+                    'processing_returned_no_results',
+                    trace_id,
+                    portal=portal_name,
+                    state_key=state_key,
+                    session_keys=list(st.session_state.keys())
+                )
 
         if state_key in st.session_state:
+            log_event(
+                'render_results_started',
+                trace_id,
+                portal=portal_name,
+                state_key=state_key,
+                session_keys=list(st.session_state.keys())
+            )
             saved = st.session_state[state_key]
             result_df = saved['result_df']
             original_df = saved['original_df']
@@ -2073,7 +2185,15 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             saved_target_profit = saved['target_profit']
             saved_min_absolute_profit = saved['min_absolute_profit']
 
-            logger.info(f"Processing completed successfully for {portal_name}")
+            log_event(
+                'render_state_loaded',
+                trace_id,
+                portal=portal_name,
+                saved_mode=saved_mode,
+                result_df=dataframe_snapshot(result_df),
+                processed_df=dataframe_snapshot(processed_df),
+                abs_profit_df=dataframe_snapshot(abs_profit_df)
+            )
             st.success("✅ Processing completed!")
 
             # Display results
@@ -2086,6 +2206,7 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             st.header(f"📈 Analysis Results - {portal_name} ({mode_text})")
 
             # Summary statistics
+            log_event('render_metrics_started', trace_id, portal=portal_name, saved_mode=saved_mode)
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
@@ -2128,17 +2249,42 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                 with col4:
                     avg_profit = result_df[result_df['Best Profit (₹)'] > 0]['Best Profit (₹)'].mean() if len(result_df[result_df['Best Profit (₹)'] > 0]) > 0 else 0
                     st.metric("Avg. Profit (₹)", f"₹{avg_profit:.0f}")
+            log_event('render_metrics_completed', trace_id, portal=portal_name, saved_mode=saved_mode)
 
             # Display the results table
             st.subheader("📋 Detailed Results")
             display_df = get_display_result_df(result_df, saved_mode)
-            st.dataframe(display_df, use_container_width=True)
+            hidden_cols = len(result_df.columns) - len(display_df.columns)
+            log_event(
+                'render_table_started',
+                trace_id,
+                portal=portal_name,
+                result_df=dataframe_snapshot(result_df),
+                display_df=dataframe_snapshot(display_df),
+                hidden_cols=hidden_cols
+            )
+            try:
+                st.dataframe(display_df, use_container_width=True)
+                log_event('render_table_completed', trace_id, portal=portal_name)
+            except Exception as e:
+                log_event(
+                    'render_table_exception',
+                    trace_id,
+                    portal=portal_name,
+                    error=str(e),
+                    traceback=traceback.format_exc(),
+                    display_df=dataframe_snapshot(display_df)
+                )
+                st.error(f"Results were calculated but the table failed to render. Trace ID: {trace_id}")
+                st.write(display_df.head(50))
+                return
             hidden_cols = len(result_df.columns) - len(display_df.columns)
             if hidden_cols > 0:
                 st.info(f"Showing summary columns in the browser. {hidden_cols} full matrix columns are included in the Excel export.")
 
             # Detailed calculations in expandable block
             if show_detailed_calc:
+                log_event('render_details_started', trace_id, portal=portal_name, saved_mode=saved_mode)
                 st.markdown("---")
                 if saved_mode == 'discount':
                     with st.expander("🔍 Detailed Calculations (First 2 Rows - Best 9-Ending Selling Price)", expanded=False):
@@ -2155,27 +2301,53 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
 
                 with st.expander("🔍 Detailed Calculations — Lookup by Article Number", expanded=False):
                     display_detailed_calculations_for_article(processed_df, portal_name, result_df, **saved_extra_params)
+                log_event('render_details_completed', trace_id, portal=portal_name, saved_mode=saved_mode)
 
             # Download section
+            log_event('render_download_started', trace_id, portal=portal_name)
             st.header("💾 Download Results")
             report_state_key = f"{state_key}_excel_report"
 
             if st.button("Prepare Excel Report", key=f"{state_key}_prepare_report"):
+                log_event(
+                    'excel_report_started',
+                    trace_id,
+                    portal=portal_name,
+                    result_df=dataframe_snapshot(result_df),
+                    display_df=dataframe_snapshot(display_df),
+                    hidden_cols=hidden_cols
+                )
                 current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    display_df.to_excel(writer, sheet_name=f'{portal_name} Summary')
-                    if hidden_cols > 0:
-                        result_df.to_excel(writer, sheet_name='Full Price Matrix')
-                    if abs_profit_df is not None:
-                        abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
-                    if original_df is not None:
-                        original_df.to_excel(writer, sheet_name='Original Data', index=False)
+                try:
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        display_df.to_excel(writer, sheet_name=f'{portal_name} Summary')
+                        if hidden_cols > 0:
+                            result_df.to_excel(writer, sheet_name='Full Price Matrix')
+                        if abs_profit_df is not None:
+                            abs_profit_df.to_excel(writer, sheet_name='Profit (₹) per Discount')
+                        if original_df is not None:
+                            original_df.to_excel(writer, sheet_name='Original Data', index=False)
 
-                st.session_state[report_state_key] = {
-                    'data': output.getvalue(),
-                    'file_name': f'{portal_name.lower()}_pricing_analysis_{current_time}.xlsx'
-                }
+                    st.session_state[report_state_key] = {
+                        'data': output.getvalue(),
+                        'file_name': f'{portal_name.lower()}_pricing_analysis_{current_time}.xlsx'
+                    }
+                    log_event(
+                        'excel_report_completed',
+                        trace_id,
+                        portal=portal_name,
+                        report_bytes=len(st.session_state[report_state_key]['data'])
+                    )
+                except Exception as e:
+                    log_event(
+                        'excel_report_exception',
+                        trace_id,
+                        portal=portal_name,
+                        error=str(e),
+                        traceback=traceback.format_exc()
+                    )
+                    st.error(f"Excel report generation failed. Trace ID: {trace_id}")
 
             # Download button
             if report_state_key in st.session_state:
@@ -2187,8 +2359,16 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 )
                 st.info(f"💡 The Excel file contains analysis for {portal_name} with your results and original data.")
+            log_event('render_results_completed', trace_id, portal=portal_name, state_key=state_key)
     
     else:
+        log_event(
+            'no_file_uploaded',
+            trace_id,
+            portal=portal_name,
+            state_key=state_key,
+            session_keys=list(st.session_state.keys())
+        )
         st.info("👆 Please upload an Excel file to get started.")
 
         # Template download
@@ -2651,7 +2831,7 @@ def commission_analysis_page():
 
 
 def main():
-    logger.info("Starting Multi-Portal Pricing Analyzer application")
+    log_event('app_starting', trace_id=None, argv=sys.argv)
 
     st.set_page_config(
         page_title="Multi-Portal Pricing Analyzer",
