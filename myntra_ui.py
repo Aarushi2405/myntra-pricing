@@ -532,7 +532,7 @@ def round_price_to_end_with_nine(price):
     
     return price_ending_nine
 
-def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details=False):
+def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details=False, rakhi=False, include_marketing_fee=False):
     """Calculate profit for TataCliq portal from a given selling price"""
     try:
         # Safely extract and convert values, handling text-formatted numbers
@@ -555,7 +555,10 @@ def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details
         processing_fee = safe_convert_to_numeric(df.get('Processing fee', 49), 'Processing fee', 49)
         processing_fee_gst = processing_fee * 0.18
 
-        if selling_price < 500:
+        if rakhi:
+            shipping_charge = 59
+            commission = 0.25 * selling_price
+        elif selling_price < 500:
             shipping_charge = 0
             commission = 150
         else:
@@ -565,8 +568,10 @@ def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details
         igst = 0.18 * commission 
         total_fees = commission + igst 
         
-        marketting_fees = 0.05 * selling_price
-        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees + processing_fee + processing_fee_gst
+        marketting_fees = 0.05 * selling_price if include_marketing_fee else 0
+        tds = 0.001 * selling_price if rakhi else 0
+        tcs = 0.005 * selling_price if rakhi else 0
+        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees + processing_fee + processing_fee_gst + tds + tcs
 
         profit = selling_price - total_cost
         profit_percent = profit / selling_price * 100 if selling_price > 0 else 0
@@ -586,6 +591,8 @@ def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details
                     'total_fees': total_fees,
                     'shipping_charge': shipping_charge,
                     'marketting_fees': marketting_fees,
+                    'tds': tds,
+                    'tcs': tcs,
                     'processing_fee': processing_fee,
                     'processing_fee_gst': processing_fee_gst,
                     'cp': cp,
@@ -603,7 +610,7 @@ def calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
-def profit_percent_from_discount_tatacliq_with_nine_ending(discount, df, show_details=False):
+def profit_percent_from_discount_tatacliq_with_nine_ending(discount, df, show_details=False, rakhi=False, include_marketing_fee=False):
     """Calculate profit for TataCliq portal with selling price ending in 9 (legacy function for compatibility)"""
     try:
         # Safely extract and convert values, handling text-formatted numbers
@@ -625,7 +632,13 @@ def profit_percent_from_discount_tatacliq_with_nine_ending(discount, df, show_de
         selling_price = round_price_to_end_with_nine(initial_selling_price)
 
         # Use the new function to calculate profit from selling price
-        return calculate_tatacliq_profit_from_selling_price(selling_price, df, show_details)
+        return calculate_tatacliq_profit_from_selling_price(
+            selling_price,
+            df,
+            show_details,
+            rakhi=rakhi,
+            include_marketing_fee=include_marketing_fee
+        )
 
     except Exception as e:
         logger.error(f"Error in TataCliq profit calculation (nine-ending): {str(e)} | Discount: {discount} | MRP: {df.get('MRP', 'N/A')} | CP: {df.get('CP', 'N/A')}")
@@ -633,7 +646,7 @@ def profit_percent_from_discount_tatacliq_with_nine_ending(discount, df, show_de
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 0, 0
 
-def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
+def profit_percent_from_discount_tatacliq(discount, df, show_details=False, rakhi=False, include_marketing_fee=False):
     """Calculate profit for TataCliq portal"""
     try:
         # Safely extract and convert values, handling text-formatted numbers
@@ -655,7 +668,10 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
         processing_fee = safe_convert_to_numeric(df.get('Processing fee', 49), 'Processing fee', 49)
         processing_fee_gst = processing_fee * 0.18
 
-        if selling_price < 500:
+        if rakhi:
+            shipping_charge = 59
+            commission = 0.25 * selling_price
+        elif selling_price < 500:
             shipping_charge = 0
             commission = 150
         else:
@@ -665,8 +681,10 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
         igst = 0.18 * commission 
         total_fees = commission + igst 
         
-        marketting_fees = 0.05 * selling_price
-        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees + processing_fee + processing_fee_gst
+        marketting_fees = 0.05 * selling_price if include_marketing_fee else 0
+        tds = 0.001 * selling_price if rakhi else 0
+        tcs = 0.005 * selling_price if rakhi else 0
+        total_cost = gst_value + shipping_charge + total_fees + cp + marketting_fees + processing_fee + processing_fee_gst + tds + tcs
 
         profit = selling_price - total_cost
         profit_percent = profit / selling_price * 100
@@ -686,6 +704,8 @@ def profit_percent_from_discount_tatacliq(discount, df, show_details=False):
                     'total_fees': total_fees,
                     'shipping_charge': shipping_charge,
                     'marketting_fees': marketting_fees,
+                    'tds': tds,
+                    'tcs': tcs,
                     'processing_fee': processing_fee,
                     'processing_fee_gst': processing_fee_gst,
                     'cp': cp,
@@ -923,7 +943,13 @@ def calculate_profit_from_selling_price(portal, selling_price, row, show_details
     if portal == 'Ajio':
         return profit_percent_from_selling_price_ajio(selling_price, row, kwargs.get('all_cost_percent', 42), show_details=show_details)
     if portal == 'TataCliq':
-        return calculate_tatacliq_profit_from_selling_price(selling_price, row, show_details=show_details)
+        return calculate_tatacliq_profit_from_selling_price(
+            selling_price,
+            row,
+            show_details=show_details,
+            rakhi=kwargs.get('rakhi', False),
+            include_marketing_fee=kwargs.get('include_marketing_fee', False)
+        )
     if portal == 'Nykaa':
         return profit_percent_from_selling_price_nykaa(selling_price, row, show_details=show_details)
     if portal == 'Pepperfry':
@@ -1502,7 +1528,12 @@ def build_profit_table_nine_ending(df, target_profit_percent, min_absolute_profi
             for selling_price in range(9, int(mrp) + 1, 10):
                 try:
                     # Calculate profit from selling price
-                    profit, profit_pct = calculate_tatacliq_profit_from_selling_price(selling_price, row)
+                    profit, profit_pct = calculate_tatacliq_profit_from_selling_price(
+                        selling_price,
+                        row,
+                        rakhi=kwargs.get('rakhi', False),
+                        include_marketing_fee=kwargs.get('include_marketing_fee', False)
+                    )
                     
                     # Calculate discount for display
                     discount = ((mrp - selling_price) / mrp) * 100 if mrp > 0 else 0
@@ -2120,12 +2151,57 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             else:
                 calculation_mode = 'discount'
         
+        # Additional inputs based on calculation mode
+        extra_params = {'calculation_mode': calculation_mode}
+
+        def render_additional_input(input_config):
+            if input_config['type'] == 'number_input':
+                extra_params[input_config['key']] = st.number_input(
+                    input_config['label'],
+                    min_value=input_config.get('min_value', 0.0),
+                    max_value=input_config.get('max_value', 100.0),
+                    value=input_config.get('value', 0.0),
+                    step=input_config.get('step', 0.1),
+                    help=input_config.get('help', '')
+                )
+            elif input_config['type'] == 'checkbox':
+                extra_params[input_config['key']] = st.checkbox(
+                    input_config['label'],
+                    value=input_config.get('default', False),
+                    help=input_config.get('help', '')
+                )
+            elif input_config['type'] == 'multiselect':
+                controlled_by = input_config.get('controlled_by')
+                if controlled_by and extra_params.get(controlled_by):
+                    default_val = input_config.get('default_when_true', input_config.get('default', []))
+                else:
+                    default_val = input_config.get('default', [])
+                selected = st.multiselect(
+                    input_config['label'],
+                    options=input_config.get('options', []),
+                    default=default_val,
+                    help=input_config.get('help', '')
+                )
+                extra_params[input_config['key']] = selected if selected else default_val
+
+        top_inputs = [
+            input_config for input_config in (additional_inputs or [])
+            if input_config.get('placement') == 'before_upload'
+        ]
+        remaining_inputs = [
+            input_config for input_config in (additional_inputs or [])
+            if input_config.get('placement') != 'before_upload'
+        ]
+
         # Show detailed calculations toggle
         show_detailed_calc = st.checkbox(
             "Show Detailed Calculations",
             value=False,
             help="Display detailed calculation breakdown in expandable section below results table"
         )
+
+        for input_config in top_inputs:
+            render_additional_input(input_config)
         
         # File upload
         uploaded_file = st.file_uploader(
@@ -2154,9 +2230,6 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             help="Enter the minimum absolute profit amount in rupees"
         )
         
-        # Additional inputs based on calculation mode
-        extra_params = {'calculation_mode': calculation_mode}
-
         if calculation_mode == 'discount':
             extra_params['include_price_matrix'] = False
         
@@ -2172,36 +2245,8 @@ def create_portal_page(portal_name, portal_emoji, calculation_info, data_format_
             )
         
         # Portal-specific additional inputs
-        if additional_inputs:
-            for input_config in additional_inputs:
-                if input_config['type'] == 'number_input':
-                    extra_params[input_config['key']] = st.number_input(
-                        input_config['label'],
-                        min_value=input_config.get('min_value', 0.0),
-                        max_value=input_config.get('max_value', 100.0),
-                        value=input_config.get('value', 0.0),
-                        step=input_config.get('step', 0.1),
-                        help=input_config.get('help', '')
-                    )
-                elif input_config['type'] == 'checkbox':
-                    extra_params[input_config['key']] = st.checkbox(
-                        input_config['label'],
-                        value=input_config.get('default', False),
-                        help=input_config.get('help', '')
-                    )
-                elif input_config['type'] == 'multiselect':
-                    controlled_by = input_config.get('controlled_by')
-                    if controlled_by and extra_params.get(controlled_by):
-                        default_val = input_config.get('default_when_true', input_config.get('default', []))
-                    else:
-                        default_val = input_config.get('default', [])
-                    selected = st.multiselect(
-                        input_config['label'],
-                        options=input_config.get('options', []),
-                        default=default_val,
-                        help=input_config.get('help', '')
-                    )
-                    extra_params[input_config['key']] = selected if selected else default_val
+        for input_config in remaining_inputs:
+            render_additional_input(input_config)
 
         # Remove internal control keys not needed downstream
         extra_params.pop('all_nine_endings', None)
@@ -2659,13 +2704,17 @@ def tatacliq_page():
     - Selling price = ROUND(MRP - (MRP × discount%), nearest 10) - 1
     - GST value = GST RATE × selling price / 100
     - Commission: ₹150 for orders < ₹500, 25% of selling price for orders ≥ ₹500
+    - Rakhi mode commission: 25% of selling price for all orders
     - IGST = 18% of commission
     - Total fees = Commission + IGST
     - Shipping charge: ₹0 for orders < ₹500, ₹118 for orders ≥ ₹500
-    - Marketing fees = 5% of selling price
+    - Rakhi mode shipping charge: ₹59
+    - Rakhi mode TDS = 0.1% of selling price
+    - Rakhi mode TCS = 0.5% of selling price
+    - Marketing fees = 5% of selling price when Marketing Fee is selected
     - Processing fee = Processing fee column value, or ₹49 if absent
     - Processing fee GST = 18% of processing fee
-    - Total cost = GST value + shipping charge + total fees + CP + marketing fees + processing fee + processing fee GST
+    - Total cost = GST value + shipping charge + total fees + CP + marketing fees + processing fee + processing fee GST + TDS + TCS
     - Profit = Selling price - Total cost
     """
     
@@ -2684,8 +2733,27 @@ def tatacliq_page():
     - Empty or invalid numeric values will be treated as 0
     - TataCliq uses a complex calculation with variable commission and shipping charges based on order value
     """
+
+    additional_inputs = [
+        {
+            'type': 'checkbox',
+            'key': 'rakhi',
+            'label': 'Rakhi',
+            'default': True,
+            'placement': 'before_upload',
+            'help': 'Use Rakhi fee rules: 25% commission and ₹59 shipping.'
+        },
+        {
+            'type': 'checkbox',
+            'key': 'include_marketing_fee',
+            'label': 'Marketing Fee',
+            'default': False,
+            'placement': 'before_upload',
+            'help': 'Include 5% marketing fee in TataCliq total cost.'
+        }
+    ]
     
-    create_portal_page("TataCliq", "🛒", calculation_info, data_format_info)
+    create_portal_page("TataCliq", "🛒", calculation_info, data_format_info, additional_inputs)
 
 def nykaa_page():
     """Nykaa pricing analyzer page"""
